@@ -1,0 +1,28 @@
+key_inchi,smiles,charge,mol_name_iupac,experimental_solubility_mol_frac,melting_point,melting_point_source
+DPBJAVGHACCNRL-UHFFFAOYSA-N,CN(C)CCOC(=O)C=C,0,2-(dimethylamino)ethyl acrylate,0.029284670100725,213.15,Chemical book
+PFPUZMSQZJFLBK-UHFFFAOYSA-N,CC(=C)C(=O)OCCN1CCNC1=O,0,2-(2-oxoimidazolidin-1-yl)ethyl methacrylate,0.083241668167388,243.15,Chemical book
+SJMYWORNLPSJQO-UHFFFAOYSA-N,CC(=C)C(=O)OC(C)(C)C,0,tert-butyl methacrylate,5.8726855831379e-05,213.15,Chemical book
+GRKDVZMVHOLESV-UHFFFAOYSA-N,Brc1c(Br)c(Br)c(COC(=O)C=C)c(Br)c1Br,0,pentabromobenzyl acrylate,2.8129418786512e-10,388.65,Chemical book
+COCLLEMEIJQBAG-UHFFFAOYSA-N,CC(C)CCCCCCCOC(=O)C(C)=C,0,8-methylnonyl methacrylate,1.5823084493137e-08,251.15,Chemical book
+OPZLDVPRAIERSE-UHFFFAOYSA-N,CC(=C)C(=O)OCCCOc1ccc(cc1)C(C)(C)c2ccc(OCCCOC(=O)C(C)=C)cc2,0,"propane-2,2-diylbis(4,1-phenyleneoxypropane-3,1-diyl) bis(2-methylacrylate)",6.2916184056873e-10,,Chemical book
+GWZMWHWAWHPNHN-UHFFFAOYSA-N,CC(O)COC(=O)C=C,0,2-hydroxypropyl acrylate,0.12150079896804,350.15,Chemical book
+SUPCQIBBMFXVTL-UHFFFAOYSA-N,CCOC(=O)C(C)=C,0,ethyl methacrylate,0.0008506837922274,198.15,Chemical book
+BAPJBEWLBFYGME-UHFFFAOYSA-N,O=C(OC)C=C,0,methyl_acrylate,0.010728848373637,198.15,Chemical book
+JIGUQPWFLRLWPJ-UHFFFAOYSA-N,O=C(OCC)C=C,0,ethyl_acrylate,0.0032645076157284,202.15,Chemical book
+VVQNEPGJFQJSBK-UHFFFAOYSA-N,O=C(OC)C(=C)C,0,methyl_methacrylate,0.0028444654760474,225.15,Chemical book
+QTKPMCIBUROOGY-UHFFFAOYSA-N,CC(=C)C(=O)OCC(F)(F)F,0,"2,2,2-trifluoroethyl methacrylate",9.6988435851542e-05,218.01,Chemical book
+VEBCLRKUSAGCDF-UHFFFAOYSA-N,C=CC(=O)OCC1CCC2C3CC(CC3COC(=O)C=C)C12,0,"(octahydro-4,7-methano-1H-indenediyl)bis(methylene) diacrylate",5.7829800366347e-07,<193.15,SDS
+RBFPEAGEJJSYCX-UHFFFAOYSA-N,CCOCCOCCOCCOC(=O)C(C)=C,0,2-[2-(2-ethoxyethoxy)ethoxy]ethyl methacrylate,0.0044697250484395,,
+QIWKUEJZZCOPFV-UHFFFAOYSA-N,CC(=C)C(=O)Oc1ccccc1,0,phenyl methacrylate,5.759189779915e-05,290.15,Chemical book
+NCTBYWFEJFTVEL-UHFFFAOYSA-N,CCC(C)COC(=O)C=C,0,2-methylbutyl acrylate,3.9995763082835e-05,207.63,Chemical book
+CCRCUPLGCSFEDV-BQYQJAHWSA-N,COC(=O)\C=C\c1ccccc1,0,methyl 3-phenylacrylate,3.3179957295202e-05,309.15,Chemical book
+KBEBGUQPQBELIU-CMDGGOBGSA-N,CCOC(=O)\C=C\c1ccccc1,0,ethyl 3-phenylacrylate,1.74655961474e-05,398.15,Chemical book
+ZDQNWDNMNKSMHI-UHFFFAOYSA-N,CC(COCC(C)OC(=O)C=C)OCC(C)OC(=O)C=C,0,"(1-methyl-1,2-ethanediyl)bis[oxy(methyl-2,1-ethanediyl)] diacrylate",0.0002396429096419,,Chemical book
+YIJYFLXQHDOQGW-UHFFFAOYSA-N,C=CC(=O)OCCN1C(=O)N(CCOC(=O)C=C)C(=O)N(CCOC(=O)C=C)C1=O,0,"(2,4,6-trioxo-1,3,5-triazine-1,3,5(2H,4H,6H)-triyl)tri-2,1-ethanediyl triacrylate",6.3648864073235e-05,325.65,Chemical book
+OQCIXXVMXBXDSC-UHFFFAOYSA-N,COC(C(C1=CC=CC=C1)=C)(OC)C2=CC=CC=C2,0,Irgacure651,9.9166995191421e-06,341.65,https://doi.org/10.1021/acs.chemmater.4c00369
+VFHVQBAGLAREND-UHFFFAOYSA-N,CC1=C(C(P(C2=CC=CC=C2)(C3=CC=CC=C3)=O)=O)C(C)=CC(C)=C1,0,TPO,1.0342305165651e-06,366.15,https://doi.org/10.1021/acs.chemmater.4c00370
+IWBDNDKRBBFYKG-JLHYYAGUSA-N,OCCOC1=CC=C(/C=C/C(C(OC)(OC)C2=CC=CC=C2)=O)C=C1,0,WS-DMPP-(L)-O(EtOH),0.0003503015129129,oil,https://doi.org/10.1021/acs.chemmater.4c00371
+PUUAYUBAIZMECZ-JLHYYAGUSA-N,OCCSC1=CC=C(/C=C/C(C(OC)(OC)C2=CC=CC=C2)=O)C=C1,0,WS-DMPP-(L)-S(EtOH),0.0001980808224227,oil,https://doi.org/10.1021/acs.chemmater.4c00372
+NHBABHBJROJJJN-JLHYYAGUSA-N,OCCN(CCO)C1=CC=C(/C=C/C(C(OC)(OC)C2=CC=CC=C2)=O)C=C1,0,WS-DMPP-(L)-N(EtOH)2,0.0001551430767897,oil,https://doi.org/10.1021/acs.chemmater.4c00373
+UUHZUEBKUREPBP-MDWZMJQESA-N,O=C(C(OC)(OC)C1=CC=C(OCCO)C=C1)/C=C/C2=CC=CC=C2,0,WS-DMPP-(R)-O(EtOH),5.3665701280155e-05,oil,https://doi.org/10.1021/acs.chemmater.4c00374
+QXLXSQHHHGJQDK-MDWZMJQESA-N,O=C(C(OC)(OC)C1=CC=C(SCCO)C=C1)/C=C/C2=CC=CC=C2,0,WS-DMPP-(R)-S(EtOH),0.0005786467723493,oil,https://doi.org/10.1021/acs.chemmater.4c00375
