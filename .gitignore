@@ -45,6 +45,7 @@ xtbtopo.mol
 *.out
 *.cpcm
 *.cpcm_corr
+
 # Uncomment next line if you don’t want to track final COSMO files
 # *.orcacosmo
 
@@ -68,3 +69,10 @@ software/
 # Ignore scratch execution folder
 # --------------------------------
 pipeline_data/tmp_exec/
+
+# --------------------------------
+# COSMO/xTB generated folders
+# --------------------------------
+charges/
+wbo/
+
