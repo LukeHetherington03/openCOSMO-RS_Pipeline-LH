@@ -1,0 +1,70 @@
+# -------------------------
+# System / shell clutter
+# -------------------------
+.bash_history
+.bashrc
+.bash_logout
+.profile
+.gitconfig
+
+# -------------------------
+# User environment caches
+# -------------------------
+.cache/
+.config/
+.local/
+.ssh/
+.vscode-server/
+snap/
+
+# -------------------------
+# ORCA scratch files
+# -------------------------
+*.gbw
+*.tmp
+*.densities
+*.prop
+*.engrad
+*.orca
+*.hess
+*.xyz.tmp
+*.inp.tmp
+
+# -------------------------
+# xTB scratch files
+# -------------------------
+xtbrestart
+xtbopt.log
+xtbtopo.mol
+*.xtboptok
+*.wbo
+
+# -------------------------
+# Pipeline outputs (ignore bulky intermediates, keep final .orcacosmo if desired)
+# -------------------------
+*.out
+*.cpcm
+*.cpcm_corr
+# Uncomment next line if you don’t want to track final COSMO files
+# *.orcacosmo
+
+# -------------------------
+# Python / IDE clutter
+# -------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.vscode/
+
+# -------------------------
+# Local test environments
+# -------------------------
+test_env/
+resources/
+software/
+
+# --------------------------------
+# Ignore scratch execution folder
+# --------------------------------
+pipeline_data/tmp_exec/

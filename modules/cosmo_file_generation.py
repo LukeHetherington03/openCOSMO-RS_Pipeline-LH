@@ -4,7 +4,7 @@ import subprocess
 import pandas as pd
 import re
 from rdkit import Chem
-from molecule_utils import MoleculeUtils
+from .molecule_utils import MoleculeUtils
 
 class CosmoFileGenerator:
     def __init__(self, cosmo_root="pipeline_data/6_cosmo_files"):

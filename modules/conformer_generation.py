@@ -17,7 +17,7 @@ import csv
 import subprocess as spr
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from molecule_utils import MoleculeUtils
+from .molecule_utils import MoleculeUtils
 
 
 class ConformerGenerator:

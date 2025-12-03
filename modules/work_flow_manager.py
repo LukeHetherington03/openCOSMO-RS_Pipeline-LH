@@ -1,13 +1,13 @@
 import os
+import pandas as pd
 
-from data_cleaning import DataCleaner
-from conformer_generation import ConformerGenerator
-from conformer_pruning import ConformerPruner
-from conformer_optimisation import ConformerOptimiser
-from cosmo_file_generation import CosmoFileGenerator
-from resource_management import ResourceManager, Benchmark
+from .data_cleaning import DataCleaner
+from .conformer_generation import ConformerGenerator
+from .conformer_pruning import ConformerPruner
+from .conformer_optimisation import ConformerOptimiser
+from .cosmo_file_generation import CosmoFileGenerator
+from .resource_management import ResourceManager, Benchmark
 
-from conformer_optimisation import ConformerOptimiser
 
 class WorkflowManager:
     def __init__(self, base_dir="pipeline_data"):
@@ -20,17 +20,51 @@ class WorkflowManager:
             "optimised_conformers": os.path.join(base_dir, "5_conformer_xyz_optimised"),
             "cosmo_files": os.path.join(base_dir, "6_cosmo_files"),
             "reports": os.path.join(base_dir, "7_reports"),
+            "temp_exec": os.path.join(base_dir, "tmp_exec"),
         }
-        # ensure folders exist
         for f in self.folders.values():
             os.makedirs(f, exist_ok=True)
 
+        # Track last outputs for chaining
+        self.last_outputs = {}
+
+
+    # ------------------ All-in-one Pipeline ------------------
+    def run_pipeline(self,
+                    raw_relpath=None,              # str: raw input file under 1_raw_data/
+                    generation_statement=None,     # dict: {engine, n_conformers, seed}
+                    pruning_args=None,             # dict: {method_subdir?, method, params}
+                    optimisation_args=None,        # dict: {pruned_subdir?, engine, params}
+                    cosmo_args=None):              # dict: {optimisation_subdir?, method, basis, solvent, charge, multiplicity}
+        ...
+
+        """
+        Run the full pipeline. Each stage uses provided arguments or defaults to last output.
+        """
+        # Step 1: Cleaning
+        if raw_relpath:
+            self.run_data_cleaning(raw_relpath)
+
+        # Step 2: Generation
+        if generation_statement:
+            self.run_conformer_generation(generation_statement=generation_statement)
+
+        # Step 3: Pruning
+        if pruning_args:
+            self.run_conformer_pruning(**pruning_args)
+
+        # Step 4: Optimisation
+        if optimisation_args:
+            self.run_conformer_optimisation(**optimisation_args)
+
+        # Step 5: COSMO
+        if cosmo_args:
+            return self.run_orca_cosmo_step(**cosmo_args)
+
+        return self.last_outputs
+
     # ------------------ Cleaning ------------------
     def run_data_cleaning(self, raw_relpath, cleaned_filename=None):
-        """
-        raw_relpath can be just a filename ('file.csv') or a subfolder path ('KEGG/file.csv')
-        inside 1_raw_data. Output will always go to 2_clean_data with the same relative path.
-        """
         raw_path = os.path.join(self.folders["raw_data"], raw_relpath)
         if cleaned_filename is None:
             base, ext = os.path.splitext(raw_relpath)
@@ -39,67 +73,27 @@ class WorkflowManager:
         os.makedirs(os.path.dirname(clean_path), exist_ok=True)
 
         cleaner = DataCleaner(raw_path, clean_path)
-        inp_file = cleaner.clean()   # now returns the .inp file
+        inp_file = cleaner.clean()
+        self.last_outputs["clean_data"] = clean_path
         return inp_file
 
-
-
-
     # ------------------ Generation ------------------
-    def run_conformer_generation(self, inp_relpath, generation_statement):
-        """
-        Run conformer generation for all molecules listed in an .inp file.
-
-        Parameters
-        ----------
-        inp_relpath : str
-            Relative path to the .inp file inside 2_clean_data.
-            Examples:
-                'file.inp'
-                'acrylates/file.inp'
-        generation_statement : dict
-            Options for conformer generation, e.g.:
-                {
-                    "engine": "rdkit",
-                    "n_conformers": 250,
-                    "seed": 42
-                }
-
-        Behavior
-        --------
-        - Resolves the input file path from 2_clean_data.
-        - Creates a mirrored output directory inside 3_conformer_xyz,
-          with an extra subfolder for the method (e.g. acrylates/rdkit).
-        - Instantiates ConformerGenerator with the chosen backend engine.
-        - Reads each line of the .inp file and generates conformers.
-        - Saves conformers with consistent naming and provenance.
-        - Logs metadata into a unified _conformer_energies.csv.
-        - Returns the output directory path.
-        """
-        # Input file lives in 2_clean_data
+    def run_conformer_generation(self, inp_relpath=None, generation_statement=None):
+        if inp_relpath is None:
+            inp_relpath = os.path.relpath(self.last_outputs.get("clean_data"), self.folders["clean_data"])
         inp_path = os.path.join(self.folders["clean_data"], inp_relpath)
 
-        # Output directory mirrors structure in 3_conformer_xyz + method subfolder
         method = generation_statement["engine"].lower()
-        out_dir = os.path.join(
-            self.folders["conformer_xyz"],
-            os.path.dirname(inp_relpath),
-            method
-        )
+        out_dir = os.path.join(self.folders["conformer_xyz"], os.path.dirname(inp_relpath), method)
         os.makedirs(out_dir, exist_ok=True)
 
-        from conformer_generation import ConformerGenerator
         generator = ConformerGenerator(method=method, output_dir=out_dir)
-
-        # Read .inp file and loop through molecules
         with open(inp_path, "r") as f:
             for line in f:
                 parts = line.strip().split("\t")
                 if len(parts) < 4:
                     continue
                 inchi_key, smiles, _, charge = parts
-                print(f"Generating conformers for {inchi_key} using {method}...")
-
                 generator.generate(
                     smiles=smiles,
                     charge=int(charge),
@@ -107,35 +101,16 @@ class WorkflowManager:
                     seed=generation_statement.get("seed", 42)
                 )
 
+        self.last_outputs["conformer_xyz"] = out_dir
         return out_dir
 
     # ------------------ Pruning ------------------
-    def run_conformer_pruning(self, method_subdir, method="energy_window", **params):
-        """
-        Run pruning on all conformers generated by a given engine.
+    def run_conformer_pruning(self, method_subdir=None, method="energy_window", **params):
+        if method_subdir is None:
+            method_subdir = os.path.relpath(self.last_outputs.get("conformer_xyz"), self.folders["conformer_xyz"])
+        dataset, engine = method_subdir.split("/")
 
-        Parameters
-        ----------
-        method_subdir : str
-            Subfolder inside 3_conformer_xyz (e.g. 'acrylates/rdkit').
-            This encodes both the dataset ('acrylates') and the generation engine ('rdkit').
-        method : str
-            Pruning strategy ("energy_window", "rmsd", "rot_bond", "topN", "percentile").
-        params : dict
-            Parameters for the pruning method, e.g. top_n=5, energy_window=5.0.
-
-        Returns
-        -------
-        str
-            Path to the lookup CSV file containing pruned conformers.
-            Naming convention: lookup_<dataset>_<engine>_<method_param>.csv
-            Folder convention: 4_pruned_conformers/<dataset>/<engine>/<method_param>/
-        """
-
-        # --- Parse dataset and engine from subdir ---
-        dataset, engine = method_subdir.split("/")  # e.g. "acrylates", "rdkit"
-
-        # --- Build suffix by concatenating method + param ---
+        # suffix naming
         if method == "topN":
             suffix = f"{method}_{params.get('top_n', 10)}"
         elif method == "energy_window":
@@ -149,61 +124,28 @@ class WorkflowManager:
         else:
             suffix = method
 
-        # --- Define input energies CSV ---
-        # This is the file produced in Step 2 (conformer generation).
-        energies_csv = os.path.join(
-            self.folders["conformer_xyz"], method_subdir, "_conformer_energies.csv"
-        )
-
-        # --- Define output folder ---
-        # Folder structure: dataset/engine/method_param
+        energies_csv = os.path.join(self.folders["conformer_xyz"], method_subdir, "_conformer_energies.csv")
         out_dir = os.path.join(self.folders["pruned_conformers"], dataset, engine, suffix)
         os.makedirs(out_dir, exist_ok=True)
 
-        # --- Define lookup filename ---
-        # Standardised naming convention: lookup_<dataset>_<engine>_<method_param>.csv
         lookup_filename = f"lookup_{dataset}_{engine}_{suffix}.csv"
         lookup_path = os.path.join(out_dir, lookup_filename)
 
-        # --- Instantiate pruner ---
-        # ConformerPruner should load energies_csv internally into self.df.
-        from conformer_pruning import ConformerPruner
         pruner = ConformerPruner(energies_csv, out_dir)
+        result = pruner.prune(method=method, output_file=lookup_path, **params)
 
-        # --- Run pruning and write lookup file ---
-        return pruner.prune(method=method, output_file=lookup_path, **params)
-
-
-
-
-
+        self.last_outputs["pruned_conformers"] = out_dir
+        return result
 
     # ------------------ Optimisation ------------------
-    def run_conformer_optimisation(self, pruned_subdir, engine="gxtb", **params):
-        """
-        Run geometry optimisation on all lookup CSVs inside a pruned conformer folder.
-
-        Parameters
-        ----------
-        pruned_subdir : str
-            Subfolder inside 4_pruned_conformers (e.g. 'acrylates/rdkit/topN_5').
-        engine : str
-            Optimisation backend ("gxtb" or "orca").
-        params : dict
-            Engine-specific parameters.
-
-        Returns
-        -------
-        list of str
-            Paths to optimisation_summary.csv files written for each lookup CSV found.
-        """
-        pruned_subdir = pruned_subdir.strip("/")
+    def run_conformer_optimisation(self, pruned_subdir=None, engine="gxtb", **params):
+        if pruned_subdir is None:
+            pruned_subdir = os.path.relpath(self.last_outputs.get("pruned_conformers"), self.folders["pruned_conformers"])
         dataset, eng, method_suffix = pruned_subdir.split("/")
 
         lookup_filename = f"lookup_{dataset}_{eng}_{method_suffix}.csv"
         lookup_csv = os.path.join(self.folders["pruned_conformers"], pruned_subdir, lookup_filename)
 
-        # Engine param suffix
         if engine == "gxtb":
             suffix = f"{engine}_{params.get('level','GFN2')}"
         elif engine == "orca":
@@ -214,7 +156,6 @@ class WorkflowManager:
         out_dir = os.path.join(self.folders["optimised_conformers"], pruned_subdir, suffix)
         os.makedirs(out_dir, exist_ok=True)
 
-        from conformer_optimisation import ConformerOptimiser
         optimiser = ConformerOptimiser(
             lookup_csv,
             out_dir,
@@ -224,35 +165,20 @@ class WorkflowManager:
             pruning_method=method_suffix,
             **params
         )
-        return optimiser.optimise()
+        result = optimiser.optimise()
 
-    # ------------------ COSMO File Generation ------------------
+        self.last_outputs["optimised_conformers"] = out_dir
+        return result
 
-
-    def run_orca_cosmo_step(self, optimisation_subdir,
-                            method="B3LYP",
-                            basis="def2-SVP",
-                            solvent="Water",
-                            charge=0,
-                            multiplicity=1):
-        """
-        Step 5: Run ORCA CPCM jobs for all conformers in a given optimisation folder.
-        Groups conformers by InChIKey and writes .orcacosmo files.
-
-        Parameters
-        ----------
-        optimisation_subdir : str
-            Relative path under self.folders["optimised_conformers"].
-        method, basis, solvent, charge, multiplicity : ORCA input settings.
-
-        Returns
-        -------
-        dict
-            Mapping { inchi_key: { 'dir': path, 'n_confs': int } }
-        """
-        generator = CosmoFileGenerator(cosmo_root=self.folders["cosmo_files"])
+    # ------------------ COSMO ------------------
+    def run_orca_cosmo_step(self, optimisation_subdir=None,
+                            method="B3LYP", basis="def2-SVP", solvent="Water",
+                            charge=0, multiplicity=1):
+        if optimisation_subdir is None:
+            optimisation_subdir = os.path.relpath(self.last_outputs.get("optimised_conformers"), self.folders["optimised_conformers"])
         optimisation_dir = os.path.join(self.folders["optimised_conformers"], optimisation_subdir)
 
+        generator = CosmoFileGenerator(cosmo_root=self.folders["cosmo_files"])
         results = generator.generate_orca_cosmo_from_folder(
             optimisation_dir,
             method=method,
@@ -261,13 +187,5 @@ class WorkflowManager:
             charge=charge,
             multiplicity=multiplicity
         )
+        self.last_outputs["cosmo_files"] = self.folders["cosmo_files"]
         return results
-        
-
-
-
-    # ------------------ Resources ------------------
-    def estimate_resources(self, mol):
-        ram, cores = ResourceManager.estimate_resources(mol)
-        print(f"Estimated resources: {ram} MB RAM, {cores} cores")
-        return ram, cores
