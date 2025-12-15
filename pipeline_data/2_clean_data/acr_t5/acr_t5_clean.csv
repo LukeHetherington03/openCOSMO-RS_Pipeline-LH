@@ -1,0 +1,6 @@
+key_inchi,smiles,charge,mol_name_iupac,experimental_solubility_mol_frac,melting_point,melting_point_source
+GWZMWHWAWHPNHN-UHFFFAOYSA-N,CC(O)COC(=O)C=C,0,2-hydroxypropyl acrylate,0.12150079896804,350.15,Chemical book
+SUPCQIBBMFXVTL-UHFFFAOYSA-N,CCOC(=O)C(C)=C,0,ethyl methacrylate,0.0008506837922274,198.15,Chemical book
+BAPJBEWLBFYGME-UHFFFAOYSA-N,O=C(OC)C=C,0,methyl_acrylate,0.010728848373637,198.15,Chemical book
+JIGUQPWFLRLWPJ-UHFFFAOYSA-N,O=C(OCC)C=C,0,ethyl_acrylate,0.0032645076157284,202.15,Chemical book
+VVQNEPGJFQJSBK-UHFFFAOYSA-N,O=C(OC)C(=C)C,0,methyl_methacrylate,0.0028444654760474,225.15,Chemical book

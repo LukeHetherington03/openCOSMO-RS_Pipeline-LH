@@ -76,6 +76,50 @@ class MoleculeUtils:
         return rdMolAlign.GetBestRMS(probe, ref, probe_conf, ref_conf)
 
 
+    @staticmethod
+    def filter_xyz_with_lookup(optimisation_dir, lookup_csv=None):
+        """
+        Recursively collect .xyz files from optimisation_dir.
+        If lookup_csv is provided, filter to only those listed.
+
+        Parameters
+        ----------
+        optimisation_dir : str
+            Path to folder containing optimised conformers.
+        lookup_csv : str, optional
+            Path to pruning lookup CSV. If provided, only conformers listed here are processed.
+
+        Returns
+        -------
+        xyz_files : list of str
+            List of file paths to .xyz files.
+        """
+        # Collect all .xyz files recursively
+        xyz_files = []
+        for root, _, files in os.walk(optimisation_dir):
+            for f in files:
+                if f.endswith(".xyz"):
+                    xyz_files.append(os.path.join(root, f))
+
+        if not xyz_files:
+            raise RuntimeError(f"No XYZ files found in {optimisation_dir}")
+
+        # If lookup CSV is provided, filter
+        if lookup_csv:
+            if not os.path.exists(lookup_csv):
+                raise FileNotFoundError(f"Lookup CSV not found: {lookup_csv}")
+            allowed_ids = set()
+            with open(lookup_csv, newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    allowed_ids.add(row.get("lookup_id") or row.get("filename"))
+            xyz_files = [f for f in xyz_files if os.path.splitext(os.path.basename(f))[0] in allowed_ids]
+
+        if not xyz_files:
+            raise RuntimeError(f"No XYZ files left to process after filtering with lookup {lookup_csv}")
+
+        return xyz_files
+
     def xyz_to_cosmo_input(xyz_file, out_file,
                         backend="orca",
                         method="B3LYP",
@@ -102,9 +146,7 @@ class MoleculeUtils:
             f.write(template)
         return out_file
     
-
-
-
+    
     @staticmethod
     def xyz_to_orca_inp(xyz_file, out_file,
                         method="B3LYP",
@@ -125,4 +167,5 @@ class MoleculeUtils:
         with open(out_file, "w") as f:
             f.write(template)
         return out_file
+
 

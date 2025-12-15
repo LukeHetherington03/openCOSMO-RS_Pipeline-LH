@@ -89,21 +89,8 @@ class DataCleaner:
 
         # Save cleaned CSV
         self.df.to_csv(self.output_csv, index=False)
-        print(f"Saved cleaned dataset to {self.output_csv}")
 
-        # Save twin .inp file
-        inp_file = self.output_csv.replace(".csv", ".inp")
-        self._write_inp_file(inp_file)
-
-        # Return the .inp file path so it can be chained
-        return inp_file
+        return self.output_csv
 
 
-    def _write_inp_file(self, inp_file):
-        with open(inp_file, "w") as f:
-            for _, row in self.df.iterrows():
-                name = str(row["mol_name_iupac"])
-                smiles = str(row["smiles"])
-                charge = str(row["charge"])
-                f.write(f"{name}\t{smiles}\t\t{charge}\n")
-        print(f"Saved conformer generator input file to {inp_file}")
+
