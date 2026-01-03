@@ -191,31 +191,25 @@ class WorkflowManager:
         }
 
 
-    # ------------------ Pruning ------------------
     def run_conformer_pruning(self, pruning_args: dict):
         """
         Run conformer pruning stage.
 
         Required arguments:
-        - dataset (str): name of dataset (e.g. 'acr_t5')
-        - engine (str): conformer generation engine ('rdkit', 'crest', 'openbabel')
+        - dataset (str)
+        - engine (str)
 
         Optional arguments:
-        - method (str): pruning method; defaults to 'topN'
-        - master_csv (str): explicit path to master CSV; if not provided, auto-located
-        - lookup_csv (str): optional existing lookup CSV to restrict pruning subset
-        - top_n (int): number of conformers to keep if using 'topN'
-        - energy_window (float): kcal/mol window if using 'energy_window'
-        - lower_pct / upper_pct (float): bounds if using 'percentile'
-        - any other method-specific parameters
-
-        Behaviour:
-        - Resolves master CSV using find_master_csv (explicit arg → remembered → auto-search).
-        - Creates a new pruning output folder under
-            `pipeline_data/4_pruned_conformers/<dataset>/<engine>/`.
-        - Writes a lookup CSV recording pruned conformers.
-        - Returns paths and provenance in a dictionary.
+        - method (str): default 'topN'
+        - master_csv (str)
+        - lookup_csv (str)
+        - top_n (int)
+        - energy_window (float)
+        - lower_pct / upper_pct (float)
+        - start (int): optional slice start for topN
+        - end (int): optional slice end for topN
         """
+
         dataset = pruning_args["dataset"]
         engine = pruning_args["engine"]
         method = pruning_args.get("method", "topN")
@@ -230,17 +224,30 @@ class WorkflowManager:
         # --- Create output folder for pruned conformers ---
         step_index = self._next_step_index(pruned_base, "lookup")
 
-        # Build a suffix that includes method + key parameter
+        # --- Build suffix including method + key parameters ---
         if method == "topN":
-            param_str = f"topN_{pruning_args.get('top_n', 10)}"
+            top_n = pruning_args.get("top_n", 10)
+            start = pruning_args.get("start")
+            end = pruning_args.get("end")
+
+            if start is not None or end is not None:
+                # Include slice in folder name for provenance
+                slice_str = f"_slice_{start or ''}-{end or ''}"
+            else:
+                slice_str = ""
+
+            param_str = f"topN_{top_n}{slice_str}"
+
         elif method == "energy_window":
             param_str = f"energyWindow_{pruning_args.get('energy_window', 5.0)}"
+
         elif method == "percentile":
             lower = pruning_args.get("lower_pct", 0)
             upper = pruning_args.get("upper_pct", 100)
             param_str = f"percentile_{lower}-{upper}"
+
         else:
-            param_str = method  # fallback
+            param_str = method
 
         suffix = f"{param_str}_step{step_index}"
         out_dir = os.path.join(pruned_base, suffix)
@@ -250,10 +257,13 @@ class WorkflowManager:
         lookup_filename = f"lookup_{dataset}_{engine}_{suffix}.csv"
         lookup_path = os.path.join(out_dir, lookup_filename)
 
-        # --- Run pruning ---
-        params = {k: v for k, v in pruning_args.items()
-                if k not in ("dataset", "engine", "method", "master_csv")}
-        
+        # --- Collect parameters to forward to pruner ---
+        params = {
+            k: v for k, v in pruning_args.items()
+            if k not in ("dataset", "engine", "method", "master_csv")
+        }
+
+        # --- Instantiate pruner ---
         pruner = ConformerPruner(
             master_csv=master_csv,
             output_dir=out_dir,
@@ -261,6 +271,7 @@ class WorkflowManager:
             energy_source=pruning_args.get("energy_source")
         )
 
+        # --- Run pruning ---
         lookup_path, n_selected, energy_source = pruner.prune(
             method=method,
             output_file=lookup_path,
@@ -288,6 +299,8 @@ class WorkflowManager:
     def run_conformer_optimisation(self, opt_args: dict):
         dataset = opt_args["dataset"]
         engine = opt_args["engine"]
+        conf_prod = opt_args.get("conf_prod", engine)
+        mute = opt_args.get("mute", False)
 
         # --- Resolve lookup CSV ---
         lookup_csv = opt_args.get("lookup_csv") or self.last_outputs.get("lookup_csv")
@@ -295,12 +308,10 @@ class WorkflowManager:
         # --- Resolve input XYZ directory ---
         xyz_dir = opt_args.get("xyz_dir")
         if not xyz_dir:
-            if self.last_outputs.get("optimised_conformers"):
-                xyz_dir = os.path.join(self.folders["optimised_conformers"],
-                                    self.last_outputs["optimised_conformers"])
-            else:
-                genmethod = opt_args.get("conf_prod", engine)
-                xyz_dir = os.path.join(self.folders["conformer_xyz"], dataset, genmethod)
+            xyz_dir = os.path.join(self.folders["conformer_xyz"], dataset, conf_prod)
+
+        # --- Resolve master CSV (this was missing before) ---
+        master_csv = self.find_master_csv(dataset, conf_prod)
 
         # --- Output folder ---
         opt_base = os.path.join(self.folders["optimised_conformers"], dataset, engine)
@@ -315,7 +326,8 @@ class WorkflowManager:
             output_dir=out_dir,
             tmp_exec=self.folders["temp_exec"],
             engine=engine,
-            master_csv=self.last_outputs.get("master_csv"),
+            master_csv=master_csv,
+            mute=mute,
             **{k: v for k, v in opt_args.items()
             if k not in ("dataset", "engine", "xyz_dir", "lookup_csv", "tmp_exec")}
         )
@@ -328,6 +340,7 @@ class WorkflowManager:
             "optimised_conformers": os.path.relpath(out_dir, self.folders["optimised_conformers"]),
             "lookup_csv": lookup_csv,
             "xyz_dir": xyz_dir,
+            "master_csv": master_csv,
             "optimisation_summary": summary_path
         })
 
@@ -336,11 +349,10 @@ class WorkflowManager:
             "engine": engine,
             "lookup_csv": lookup_csv,
             "xyz_dir": xyz_dir,
+            "master_csv": master_csv,
             "optimised_conformers_folder": out_dir,
             "summary_csv": summary_path
         }
-
-
 
     # ------------------ COSMO ------------------
     def run_orca_cosmo_step(self, cosmo_args=None):

@@ -2,6 +2,7 @@ import os          # for filesystem paths and directory creation
 import subprocess  # for running external programs (xtb, gxtb, orca)
 import pandas as pd  # for reading/writing CSVs (lookup and master tables)
 import shutil 
+import time 
 
 # At module level (conformer_optimisation.py)
 OPTIMISATION_METHODS = {
@@ -22,6 +23,7 @@ class ConformerOptimiser:
                  output_dir,
                  tmp_exec,
                  engine="gxtb",
+                 mute=False,
                  master_csv=None,
                  **params):
         """
@@ -38,6 +40,8 @@ class ConformerOptimiser:
         tmp_exec : str
             Scratch directory for temporary execution files.
             External binaries (xtb, gxtb, orca) will run here.
+        mute : Bool
+            Job counter verbosity
         engine : str, default="gxtb"
             Optimisation backend to use. Supported values:
                 - "xtb"  : classic GFN-xTB program
@@ -57,57 +61,56 @@ class ConformerOptimiser:
         self.output_dir = output_dir
         self.tmp_exec = tmp_exec
         self.engine = engine.lower()
+        self.mute = mute
         self.master_csv = master_csv
         self.params = params
 
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.tmp_exec, exist_ok=True)
 
-        self.input_xyz_dir = input_xyz_dir
-        self.lookup_csv = lookup_csv
-        self.output_dir = output_dir
-        self.tmp_exec = tmp_exec
-        self.engine = engine.lower()
-        self.params = params
-
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.tmp_exec, exist_ok=True)
-
-
-
     def optimise(self):
-
         df_lookup = pd.read_csv(self.lookup_csv, comment="#")
         df_master = pd.read_csv(self.master_csv)
+        total_jobs = len(df_lookup)
 
         results = []
-        for row in df_lookup.itertuples(index=False):
+
+        for idx, row in enumerate(df_lookup.itertuples(index=False), start=1):
+
+            if not self.mute:
+                self._print_progress(idx, total_jobs, row.lookup_id)
+
             xyz_file = self._find_xyz_file(row.lookup_id)
             if not xyz_file:
-                print(f"Missing XYZ for {row.lookup_id}, skipping.")
+                if not self.mute:
+                    print(f"Missing XYZ for {row.lookup_id}, skipping.")
                 continue
 
-            # Unified call: engine-specific runner
+            start = time.perf_counter()
             result = self._run_engine(xyz_file)
+            elapsed = time.perf_counter() - start
 
-            # Update master CSV with returned fields
+
+            # Update master CSV
             mask = df_master["lookup_id"] == row.lookup_id
             for col, val in result["updates"].items():
                 df_master.loc[mask, col] = val
 
             results.append({
                 "lookup_id": row.lookup_id,
-                "energy": result["updates"].get("energy_xtb") or
-                          result["updates"].get("energy_gxtb") or
-                          result["updates"].get("energy_dft"),
-                "status": result["updates"].get("status_xtb") or
-                          result["updates"].get("status_gxtb") or
-                          result["updates"].get("status_dft"),
+                "energy": result["updates"].get("energy_xtb")
+                        or result["updates"].get("energy_gxtb")
+                        or result["updates"].get("energy_dft"),
+                "status": result["updates"].get("status_xtb")
+                        or result["updates"].get("status_gxtb")
+                        or result["updates"].get("status_dft"),
                 "xyz_file": result["out_file"],
-                "log_file": result["log_file"]
+                "log_file": result["log_file"],
+                "elapsed_seconds": elapsed
             })
 
         df_master.to_csv(self.master_csv, index=False)
+
         summary_path = os.path.join(self.output_dir, "_optimisation_summary.csv")
         pd.DataFrame(results).to_csv(summary_path, index=False)
         return summary_path
@@ -379,3 +382,37 @@ class ConformerOptimiser:
         }
 
 
+    def _find_xyz_file(self, lookup_id):
+        """
+        Return the path to the XYZ file matching this lookup_id.
+        Accepts either exact filename match or prefix match.
+        """
+        base = str(lookup_id)
+
+        # Exact match
+        exact = os.path.join(self.input_xyz_dir, f"{base}.xyz")
+        if os.path.exists(exact):
+            return exact
+
+        # Prefix match (e.g. lookup_id = "mol_001" matches "mol_001_conf3.xyz")
+        for fn in os.listdir(self.input_xyz_dir):
+            if fn.startswith(base) and fn.endswith(".xyz"):
+                return os.path.join(self.input_xyz_dir, fn)
+
+        return None
+
+    def _print_progress(self, idx, total, lookup_id):
+        """Print a clean progress line showing job count and CPU allocation."""
+        max_cores = os.cpu_count() or 1
+        requested_cores = self.params.get("ncores")
+
+        if requested_cores is None:
+            requested_cores = max(1, int(max_cores * 0.8))
+
+        cpu_pct = (requested_cores / max_cores) * 100
+
+        print(
+            f"[{idx:4d} / {total}]  "
+            f"{self.engine:<6}  |  using {cpu_pct:4.0f}% CPUs "
+            f"({requested_cores} cores)  |  lookup_id = {lookup_id}"
+        )

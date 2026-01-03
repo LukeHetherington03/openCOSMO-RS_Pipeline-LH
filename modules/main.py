@@ -31,16 +31,16 @@ def main():
     }
 
     pruning_args = {
-        "dataset": dataset,
-        "engine": conf_prod,
+        "dataset": "acrylates",
+        "engine": "rdkit",
         "method": "topN",
         "top_n": 20,
     }
 
     optimisation_args = {
         "dataset": dataset,
-        "engine": "gxtb",
-        "xyz_dir": os.path.join(base_dir, "3_conformer_xyz", dataset, "rdkit"),
+        "engine": "dft",
+        "xyz_dir": os.path.join(base_dir, "3_conformer_xyz", dataset, conf_prod),
         "lookup_csv": os.path.join(base_dir,
                                 "4_pruned_conformers",
                                 dataset,
@@ -49,6 +49,21 @@ def main():
                                 f"lookup_{dataset}_{conf_prod}_topN_20_step1.csv")
     }
 
+    opt_args = {
+        "dataset": "acrylates",
+        "engine": "dft",                 # optimisation engine
+        "conf_prod": "rdkit",             # conformer generation engine
+        "lookup_csv": (
+            "pipeline_data/4_pruned_conformers/"
+            "acrylates/rdkit/topN_20_step1/"
+            "lookup_acrylates_rdkit_topN_20_step2.csv"
+        ),
+        "xyz_dir": (
+            "pipeline_data/3_conformer_xyz/"
+            "acrylates/rdkit"
+        ),
+        "max_iter": 250
+    }
 
     cosmo_args = {
         "dataset": dataset,
@@ -60,7 +75,9 @@ def main():
         #{"stage": "cleaning", "args": cleaning_args},
         #{"stage": "generation", "args": generation_args},
         #{"stage": "pruning", "args": pruning_args},
-        {"stage": "optimisation", "args": optimisation_args},
+        {"stage": "optimisation", "args": opt_args},
+        #{"stage": "pruning", "args": pruning_args2},
+        #{"stage": "optimisation", "args": optimisation_args2},
         #{"stage": "cosmo", "args": cosmo_args},
     ]
 

@@ -8,7 +8,7 @@ import os
 from rdkit import Chem
 from rdkit.Chem import rdMolAlign, rdDetermineBonds, rdMolDescriptors
 from rdkit.Geometry import Point3D
-
+import csv
 
 class MoleculeUtils:
     @staticmethod

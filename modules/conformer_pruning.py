@@ -112,15 +112,42 @@ class ConformerPruner:
 
 
 
-    # ------------------ Methods ------------------
+        # ------------------ Methods ------------------
+    def _prune_topN(self, top_n=10, start=None, end=None):
+        """
+        Keep N lowest-energy conformers per molecule, with optional slicing.
 
-    def _prune_topN(self, top_n=10):
-        """Keep N lowest energy conformers per molecule."""
+        Parameters
+        ----------
+        top_n : int
+            Number of lowest-energy conformers to consider.
+        start : int, optional
+            1-based index of the first conformer to keep after sorting.
+        end : int, optional
+            1-based index of the last conformer to keep after sorting.
+
+        Returns
+        -------
+        DataFrame
+            Pruned conformer subset.
+        """
         pruned_groups = []
+
         for inchi, group in self.df.groupby("inchi_key"):
-            pruned = group.sort_values("energy_active").head(top_n)
-            pruned_groups.append(pruned)
+            # Sort by energy
+            sorted_group = group.sort_values("energy_active").head(top_n)
+
+            # Apply optional slicing
+            if start is not None or end is not None:
+                # Convert to 0-based slicing
+                s = (start - 1) if start is not None else None
+                e = end if end is not None else None
+                sorted_group = sorted_group.iloc[s:e]
+
+            pruned_groups.append(sorted_group)
+
         return pd.concat(pruned_groups)
+
 
     def _prune_energy_window(self, energy_window=5.0):
         """Keep conformers within X kcal/mol of lowest energy per molecule."""
