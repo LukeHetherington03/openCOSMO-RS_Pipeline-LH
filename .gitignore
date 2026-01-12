@@ -38,16 +38,14 @@ xtbopt.log
 xtbtopo.mol
 *.xtboptok
 *.wbo
+*.xtbtmp
+*.xtb
+*.gfnff
 
 # -------------------------
-# Pipeline outputs (ignore bulky intermediates, keep final .orcacosmo if desired)
+# Pipeline runtime data
 # -------------------------
-*.out
-*.cpcm
-*.cpcm_corr
-
-# Uncomment next line if you don’t want to track final COSMO files
-# *.orcacosmo
+pipeline_data/
 
 # -------------------------
 # Python / IDE clutter
@@ -64,15 +62,4 @@ __pycache__/
 test_env/
 resources/
 software/
-
-# --------------------------------
-# Ignore scratch execution folder
-# --------------------------------
-pipeline_data/tmp_exec/
-
-# --------------------------------
-# COSMO/xTB generated folders
-# --------------------------------
-charges/
-wbo/
-
+dev/
