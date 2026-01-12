@@ -1,6 +1,0 @@
-"Name","Experimental Solubility /mol frac","SMILES","Melting point","Melting point source"
-"2-hydroxypropyl acrylate","0.12150079896804","CC(O)COC(=O)C=C","350.15","Chemical book"
-"ethyl methacrylate","0.00085068379222741","CCOC(=O)C(C)=C","198.15","Chemical book"
-"methyl_acrylate","0.010728848373637","O=C(OC)C=C","198.15","Chemical book"
-"ethyl_acrylate","0.0032645076157284","O=C(OCC)C=C","202.15","Chemical book"
-"methyl_methacrylate","0.0028444654760474","O=C(OC)C(=C)C","225.15","Chemical book"
