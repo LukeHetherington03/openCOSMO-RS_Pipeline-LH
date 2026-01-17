@@ -1,0 +1,21 @@
+{
+  "_comment": "Environment paths configuration for openCOSMO-RS Pipeline",
+  "_note": "Paths point to actual executables, not just directories",
+
+  "gxtb_home": "/home/lunet/cglh4/software/g-xtb-main",
+  "gxtb_executable": "/home/lunet/cglh4/software/g-xtb-main/binary/gxtb",
+  
+  "xtb_home": "/home/lunet/cglh4/software/xtb-dist",
+  "xtb_executable": "/home/lunet/cglh4/software/xtb-dist/bin/xtb",
+  
+  "orca_home": "/home/lunet/cglh4/software/orca_6_1_1",
+  "orca_executable": "/home/lunet/cglh4/software/orca_6_1_1/orca",
+  
+  "opencosmo_home": "/home/lunet/cglh4/resources/openCOSMO-RS_py-git",
+  "opencosmo_python_src": "/home/lunet/cglh4/resources/openCOSMO-RS_py-git/src",
+  
+  "opencosmo_cpp_bindings": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp-git/bindings",
+  "opencosmo_binary": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp-git/bindings/openCOSMORS",
+  
+  "constant_files_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES"
+}

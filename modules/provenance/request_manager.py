@@ -7,7 +7,10 @@ import re
 import socket
 import getpass
 from datetime import datetime
+
 from modules.provenance.log_helper import LogHelper
+from modules.provenance.job_manager import Job
+
 
 class RequestError(Exception):
     pass
@@ -32,8 +35,9 @@ class Request:
     def create_new(cls, base_dir, dataset, pipeline_spec, parameters=None):
         parameters = parameters or {}
 
+        # Preserve order AND duplicates
         pipeline_sequence = [step["stage"] for step in pipeline_spec]
-        stage_args = {step["stage"]: step.get("args", {}) for step in pipeline_spec}
+        stage_args = [step.get("args", {}) for step in pipeline_spec]
 
         # 1. Generate ID
         request_id = cls._generate_request_id(parameters)
@@ -52,25 +56,23 @@ class Request:
             load_existing=False,
         )
 
-        # 3. NOW we can log (self exists)
+        # 3. Logging
         request.log_header(f"Request {request.request_id} created")
         request.log(f"User: {getpass.getuser()}")
         request.log(f"Host: {socket.gethostname()}")
         request.log(f"Pipeline sequence: {request.pipeline_sequence}")
 
-        # 4. Create first job
-        from modules.provenance.job_manager import Job
+        # 4. Create first job (index 0) — unified logic
         first_stage = pipeline_sequence[0]
+        first_args = {**parameters, **stage_args[0]}
+
         job = Job.create_new(
             request=request,
             stage=first_stage,
-            parameters={
-                **parameters,
-                **stage_args[first_stage],
-            }
+            parameters=first_args,
         )
 
-        # 5. Register job
+        # 5. Register job ONCE
         request.register_job(job.job_id)
         request.log(f"Created first job: {job.job_id}")
 
@@ -78,12 +80,12 @@ class Request:
 
     @classmethod
     def continue_from(cls, base_dir, parent_request_id, parent_job_id,
-                    dataset, pipeline_spec, parameters=None):
+                      dataset, pipeline_spec, parameters=None):
 
         parameters = parameters or {}
 
         pipeline_sequence = [step["stage"] for step in pipeline_spec]
-        stage_args = {step["stage"]: step.get("args", {}) for step in pipeline_spec}
+        stage_args = [step.get("args", {}) for step in pipeline_spec]
 
         # Generate new request ID
         request_id = cls._generate_request_id(parameters)
@@ -113,25 +115,18 @@ class Request:
 
         # First job uses previous job's energies.json
         first_stage = pipeline_sequence[0]
-        summary_file = os.path.join(
-            base_dir,
-            "requests",
-            parent_request_id,
-            "jobs",
-            parent_job_id,
-            "outputs",
-            "energies.json"
-        )
+        summary_file = request.get_job_output(parent_job_id, "energies.json")
 
-        from modules.provenance.job_manager import Job
+        first_args = {
+            **parameters,
+            **stage_args[0],
+            "summary_file": summary_file,
+        }
+
         job = Job.create_new(
             request=request,
             stage=first_stage,
-            parameters={
-                **parameters,
-                **stage_args[first_stage],
-                "summary_file": summary_file,
-            }
+            parameters=first_args,
         )
 
         request.register_job(job.job_id)
@@ -152,7 +147,7 @@ class Request:
             parent_request=None,
             continued_from_request=None,
             continued_from_job=None,
-            load_existing=True
+            load_existing=True,
         )
 
     # ------------------------------------------------------------
@@ -182,7 +177,7 @@ class Request:
         else:
             self.dataset = dataset
             self.pipeline_sequence = pipeline_sequence
-            self.stage_args = stage_args or {}
+            self.stage_args = stage_args or []
             self.parameters = parameters or {}
 
             # Resource + detached handling
@@ -196,8 +191,6 @@ class Request:
 
             self.jobs = []
             self._write_request_json()
-
-
 
     # ------------------------------------------------------------
     # ID generation
@@ -247,7 +240,14 @@ class Request:
 
         self.dataset = data["dataset"]
         self.pipeline_sequence = data["pipeline_sequence"]
-        self.stage_args = data.get("stage_args", {})
+
+        stage_args = data.get("stage_args", [])
+        if isinstance(stage_args, dict):
+            # legacy dict format
+            self.stage_args = [stage_args.get(stage, {}) for stage in self.pipeline_sequence]
+        else:
+            self.stage_args = stage_args
+
         self.parameters = data.get("parameters", {})
 
         self.parent_request = data.get("parent_request")
@@ -269,9 +269,8 @@ class Request:
         self._write_request_json()
         LogHelper.write(self.request_log_path, f"Registered job: {job_id}")
 
-
     # ------------------------------------------------------------
-    # Pipeline sequencing
+    # Legacy name-based sequencing (kept for compatibility)
     # ------------------------------------------------------------
     def get_next_stage(self, current_stage):
         if self.pipeline_sequence is None:
@@ -284,34 +283,50 @@ class Request:
 
         return self.pipeline_sequence[idx + 1] if idx + 1 < len(self.pipeline_sequence) else None
 
-    def create_next_job(self, previous_job, extra_parameters=None):
-        from modules.provenance.job_manager import Job
+    # ------------------------------------------------------------
+    # Preferred index-based sequencing
+    # ------------------------------------------------------------
+    def create_next_job_by_index(self, current_index, extra_parameters=None):
+        next_index = current_index + 1
+        if next_index >= len(self.pipeline_sequence):
+            return None
 
-        next_stage = self.get_next_stage(previous_job.stage)
-        if next_stage is None:
-            raise RequestError(f"No next stage after {previous_job.stage}")
-
+        next_stage = self.pipeline_sequence[next_index]
+        stage_args = self.stage_args[next_index] if next_index < len(self.stage_args) else {}
         extra_parameters = extra_parameters or {}
 
-        summary_file = os.path.join(previous_job.outputs_dir, "energies.json")
+        # Get previous job's summary file using Job.STAGE_OUTPUTS
+        summary_file = None
+        if 0 <= current_index < len(self.jobs):
+            prev_job_id = self.jobs[current_index]
+            prev_stage = self.pipeline_sequence[current_index]
+            
+            # Use Job's stage output mapping
+            if prev_stage in Job.STAGE_OUTPUTS:
+                summary_filename = Job.STAGE_OUTPUTS[prev_stage]
+                prev_outputs = os.path.join(self.jobs_dir, prev_job_id, "outputs")
+                summary_file = os.path.join(prev_outputs, summary_filename)
 
-        stage_params = {
-            **self.parameters,               # global params
-            **self.stage_args.get(next_stage, {}),  # stage-specific params
-            **extra_parameters,              # overrides
-            "summary_file": summary_file,
+        params = {
+            **self.parameters,
+            **stage_args,
+            **extra_parameters,
         }
+
+        if summary_file is not None:
+            params["summary_file"] = summary_file
 
         job = Job.create_new(
             request=self,
             stage=next_stage,
-            parameters=stage_params,
+            parameters=params,
         )
 
         self.register_job(job.job_id)
-        self.log(f"Created next job: {job.job_id} (stage: {next_stage})")
+        self.log(f"Created next job: {job.job_id} (stage: {next_stage}, index: {next_index})")
 
         return job
+
 
     # ------------------------------------------------------------
     # Convenience
@@ -327,3 +342,6 @@ class Request:
 
     def log_section(self, title, echo=False):
         LogHelper.section(self.request_log_path, title, echo)
+
+    def get_job_output(self, job_id, filename):
+        return os.path.join(self.jobs_dir, job_id, "outputs", filename)

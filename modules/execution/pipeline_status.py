@@ -1,152 +1,120 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import json
-import time
 from datetime import datetime
+
 
 class PipelineStatus:
     """
-    Status-plane operations:
-      - list_active()
-      - get_status(request_id)
-      - summary()
+    Reports status of pipeline requests.
     """
 
     def __init__(self, base_dir):
         self.base_dir = base_dir
+        self.requests_root = os.path.join(base_dir, "requests")
 
     # ------------------------------------------------------------
-    # Helpers
+    # Request ID resolver (NEW)
     # ------------------------------------------------------------
-    def _requests_root(self):
-        return os.path.join(self.base_dir, "requests")
+    def _resolve_request_id(self, partial_id):
+        """
+        Resolve a partial request ID to the full folder name.
+        If multiple matches exist, return None and let caller handle it.
+        """
+        if not os.path.exists(self.requests_root):
+            return None
 
-    def _job_state_path(self, req_id, job_id):
-        return os.path.join(self._requests_root(), req_id, "jobs", job_id, "job_state.json")
+        matches = [f for f in os.listdir(self.requests_root) if f.startswith(partial_id)]
 
-    def _stage_log_path(self, req_id, job_id):
-        return os.path.join(self._requests_root(), req_id, "jobs", job_id, "stage.log")
+        if len(matches) == 1:
+            return matches[0]
+
+        if len(matches) == 0:
+            return None
+
+        # Multiple matches — caller will handle messaging
+        return matches
+
 
     # ------------------------------------------------------------
-    # Active requests
+    # List active requests
     # ------------------------------------------------------------
     def list_active(self):
-        root = self._requests_root()
-        if not os.path.exists(root):
+        if not os.path.exists(self.requests_root):
             return []
 
         active = []
-        for req_id in os.listdir(root):
-            req_dir = os.path.join(root, req_id)
-            jobs_dir = os.path.join(req_dir, "jobs")
-            if not os.path.exists(jobs_dir):
+        for folder in os.listdir(self.requests_root):
+            control_path = os.path.join(self.requests_root, folder, "control.json")
+            if not os.path.exists(control_path):
+                active.append(folder)
                 continue
 
-            # Look for any job without completion marker
-            for job_id in os.listdir(jobs_dir):
-                job_state_path = self._job_state_path(req_id, job_id)
-                if not os.path.exists(job_state_path):
-                    continue
-                state = json.load(open(job_state_path))
-                if not state.get("complete", False):
-                    active.append(req_id)
-                    break
+            with open(control_path) as f:
+                ctrl = json.load(f)
+
+            if not ctrl.get("stop", False):
+                active.append(folder)
 
         return active
 
     # ------------------------------------------------------------
-    # Parse stage.log for progress
+    # Get status for a specific request
     # ------------------------------------------------------------
-    def _parse_progress(self, log_path):
-        if not os.path.exists(log_path):
-            return ("unknown", None)
+    def get_status(self, request_id):
+        folder = self._resolve_request_id(request_id)
 
-        lines = open(log_path).read().splitlines()
-        for line in reversed(lines):
-            if "[" in line and "/" in line:
-                try:
-                    part = line.split("]")[0].strip("[")
-                    done, total = map(int, part.split("/"))
-                    return (f"{done}/{total}", (done, total))
-                except:
-                    pass
+        if folder is None:
+            return f"No request matches prefix '{request_id}'"
 
-        return ("unknown", None)
+        if isinstance(folder, list):
+            msg = [f"Multiple requests match prefix '{request_id}':"]
+            for f in folder:
+                msg.append(f"  - {f}")
+            msg.append("Please specify further.")
+            return "\n".join(msg)
 
-    # ------------------------------------------------------------
-    # ETA estimation
-    # ------------------------------------------------------------
-    def _estimate_eta(self, req_id, job_id, progress_tuple):
-        if progress_tuple is None:
-            return "unknown"
+        if folder is None:
+            return f"No request matches prefix '{request_id}'"
 
-        done, total = progress_tuple
-        remaining = total - done
-
-        # Look for timing in stage.log
-        log_path = self._stage_log_path(req_id, job_id)
-        lines = open(log_path).read().splitlines()
-
-        times = []
-        for line in lines:
-            if "seconds" in line.lower():
-                try:
-                    t = float(line.split()[-2])
-                    times.append(t)
-                except:
-                    pass
-
-        if not times:
-            return "unknown"
-
-        avg = sum(times) / len(times)
-        eta_seconds = remaining * avg
-
-        return f"~{int(eta_seconds)}s"
-
-    # ------------------------------------------------------------
-    # Status for a single request
-    # ------------------------------------------------------------
-    def get_status(self, req_id):
-        req_dir = os.path.join(self._requests_root(), req_id)
+        req_dir = os.path.join(self.requests_root, folder)
         jobs_dir = os.path.join(req_dir, "jobs")
 
+        if not os.path.exists(jobs_dir):
+            return f"Request {folder}: no jobs directory (request incomplete or corrupted)"
+
         job_ids = sorted(os.listdir(jobs_dir))
-        current_job = job_ids[-1]
 
-        job_state = json.load(open(self._job_state_path(req_id, current_job)))
+        lines = [f"Status for request {folder}:"]
+        lines.append(f"  Jobs: {len(job_ids)}")
 
-        progress_str, progress_tuple = self._parse_progress(
-            self._stage_log_path(req_id, current_job)
-        )
+        for job_id in job_ids:
+            job_dir = os.path.join(jobs_dir, job_id)
+            state_file = os.path.join(job_dir, "job_state.json")
 
-        eta = self._estimate_eta(req_id, current_job, progress_tuple)
+            if os.path.exists(state_file):
+                with open(state_file) as f:
+                    state = json.load(f)
+                stage = state.get("stage", "unknown")
+                num_in = state.get("num_input", "?")
+                num_out = state.get("num_output", "?")
+                lines.append(f"    - {job_id}: stage={stage}, {num_in}→{num_out}")
+            else:
+                lines.append(f"    - {job_id}: (no job_state.json)")
 
-        return {
-            "request_id": req_id,
-            "stage": job_state.get("stage"),
-            "job_id": current_job,
-            "progress": progress_str,
-            "eta": eta,
-            "resources": job_state.get("resources", {}),
-        }
+        return "\n".join(lines)
 
     # ------------------------------------------------------------
-    # Human-readable summary
+    # Summary of all active requests
     # ------------------------------------------------------------
     def summary(self):
         active = self.list_active()
         if not active:
-            return "No active pipeline runs."
+            return "No active requests."
 
-        out = []
-        for req_id in active:
-            st = self.get_status(req_id)
-            out.append(
-                f"Request: {st['request_id']}\n"
-                f"  Stage: {st['stage']}\n"
-                f"  Job: {st['job_id']}\n"
-                f"  Progress: {st['progress']}\n"
-                f"  ETA: {st['eta']}\n"
-            )
-
-        return "\n".join(out)
+        lines = ["Active requests:"]
+        for r in active:
+            lines.append(f"  - {r}")
+        return "\n".join(lines)

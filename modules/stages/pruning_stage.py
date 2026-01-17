@@ -1,220 +1,238 @@
 import os
 import json
-import time
-import shutil
 import pandas as pd
+import numpy as np
 
+from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 
 
-class PruningStage:
+class PruningStage(BaseStage):
     """
-    Pruning stage:
-      - Takes an energies.json from a previous stage
-      - Copies it into inputs/
-      - Copies all referenced XYZs into inputs/xyz/
-      - Applies pruning strategy
-      - Writes pruned energies.json, summary.csv, xyz/ into outputs/
+    Prunes conformers for each molecule group.
+
+    Features:
+      - Molecule-level job items (clean logs)
+      - Conformer-level pruning logic
+      - Configurable pruning strategies:
+            * keep_lowest_n
+            * energy_window
+            * all (no pruning)
+            * rmsd (placeholder)
+      - Removes conformers with missing energies (logged)
+      - Produces:
+            * pruned energies.json
+            * pruning_summary.csv (human readable)
     """
 
     # ------------------------------------------------------------
-    # Entry point (clean + readable)
+    # Entry point
     # ------------------------------------------------------------
-    def run(self, job):
-        params = job.parameters
+    def execute(self):
+        self.log_header("Starting Pruning Stage")
+
+        params = self.parameters
+
+        # ------------------------------------------------------------
+        # 🔧 Patch: Map pipeline-style args → pruning-stage args
+        # ------------------------------------------------------------
+        if "strategy" in params:
+            params["pruning_strategy"] = params["strategy"]
+
+        if "strategy_params" in params and isinstance(params["strategy_params"], dict):
+            for k, v in params["strategy_params"].items():
+                params[k] = v
+
+        # Alias: top_n → keep_lowest_n
+        if params.get("pruning_strategy") == "top_n":
+            params["pruning_strategy"] = "keep_lowest_n"
+
+        self.log(f"[DEBUG] Using pruning strategy: {params.get('pruning_strategy')}")
+        self.log(f"[DEBUG] Strategy parameters: { {k: params[k] for k in params if k not in ('summary_file')} }")
 
         summary_file = params.get("summary_file")
-        strategy = params.get("strategy")
-        strategy_params = params.get("strategy_params", {})
-
         if summary_file is None:
-            raise ValueError("PruningStage requires 'summary_file' parameter.")
+            self.fail("PruningStage requires summary_file from previous stage.")
 
-        job.log_header("Starting pruning stage")
-        job.log(f"Strategy: {strategy} {strategy_params}")
-        job.log(f"Input energies: {summary_file}")
+        if not os.path.isfile(summary_file):
+            self.fail(f"summary_file does not exist: {summary_file}")
 
-        # Prepare directories + load entries
-        inputs, entries = self._prepare_inputs(job, summary_file)
+        # Load entries
+        entries = self._load_entries(summary_file)
 
         # Group by molecule
         groups = self._group_by_molecule(entries)
-        total_confs = len(entries)
-        total_mols = len(groups)
 
-        job.log(f"Input: {total_confs} conformers across {total_mols} molecules")
+        # Job items = molecule IDs
+        molecule_ids = list(groups.keys())
+        self.set_items(molecule_ids)
 
-        # Apply pruning
-        pruned = self._prune_all(job, groups, strategy, strategy_params)
+        # Prune each molecule group
+        pruned_entries = []
+        summary_rows = []
+
+        for mol_id, conformers in groups.items():
+            try:
+                survivors, summary_row = self._prune_group(mol_id, conformers, params)
+                pruned_entries.extend(survivors)
+                summary_rows.append(summary_row)
+
+                self.update_progress(mol_id, success=True)
+                self.log(f"[INFO] Pruning complete for {mol_id}: kept {len(survivors)} conformers")
+
+            except Exception as e:
+                self.log(f"[ERROR] Pruning failed for {mol_id}: {e}")
+                self.update_progress(mol_id, success=False)
 
         # Write outputs
-        self._write_outputs(job, pruned, params, inputs["missing"])
+        self._write_outputs(pruned_entries, summary_rows)
 
-        job.log_header("Pruning complete")
-        job.log(f"{len(pruned)} conformers retained")
-        job.log(f"Outputs written to: {job.outputs_dir}")
-
-        job.mark_complete()
+        self.log_header("Pruning Stage Complete")
+        self.job.mark_complete()
 
     # ------------------------------------------------------------
-    # Input preparation
+    # Load entries
     # ------------------------------------------------------------
-    def _prepare_inputs(self, job, summary_file):
-        inputs_dir = job.inputs_dir
-        outputs_dir = job.outputs_dir
+    def _load_entries(self, summary_file):
+        try:
+            with open(summary_file) as f:
+                entries = json.load(f)
+        except Exception as e:
+            self.fail(f"Failed to load summary_file: {e}")
 
-        inputs_xyz_dir = os.path.join(inputs_dir, "xyz")
-        outputs_xyz_dir = os.path.join(outputs_dir, "xyz")
+        if not isinstance(entries, list):
+            self.fail("summary_file must contain a list of conformer entries.")
 
-        os.makedirs(inputs_xyz_dir, exist_ok=True)
-        os.makedirs(outputs_xyz_dir, exist_ok=True)
-
-        # Copy energies.json
-        local_energies_path = os.path.join(inputs_dir, "energies.json")
-        shutil.copy(summary_file, local_energies_path)
-
-        # Load entries
-        with open(local_energies_path) as f:
-            entries = json.load(f)
-
-        # Copy XYZs
-        missing = []
-        for entry in entries:
-            src = entry["xyz_path"]
-            dst = os.path.join(inputs_xyz_dir, os.path.basename(src))
-
-            if os.path.exists(src):
-                shutil.copy(src, dst)
-                entry["xyz_path"] = dst
-            else:
-                missing.append(entry["lookup_id"])
-
-        if missing:
-            job.log(f"[WARNING] Missing XYZs: {len(missing)}")
-            for m in missing:
-                job.log(f"  - {m}", indent=2)
-
-        # Filter missing
-        entries = [e for e in entries if e["lookup_id"] not in missing]
-
-        if not entries:
-            raise ValueError("No valid conformers available for pruning.")
-
-        return {
-            "inputs_dir": inputs_dir,
-            "outputs_dir": outputs_dir,
-            "missing": missing,
-            "outputs_xyz_dir": outputs_xyz_dir,
-        }, entries
+        return entries
 
     # ------------------------------------------------------------
-    # Group by molecule
+    # Group conformers by molecule
     # ------------------------------------------------------------
     def _group_by_molecule(self, entries):
         groups = {}
         for e in entries:
-            mol_id = e["lookup_id"].split("_conf")[0]
+            lookup = e.get("lookup_id")
+            if not lookup:
+                self.log("[WARNING] Entry missing lookup_id, skipping")
+                continue
+
+            # Extract molecule ID (everything before _confXXX)
+            if "_conf" in lookup:
+                mol_id = lookup.split("_conf")[0]
+            else:
+                mol_id = lookup  # fallback
+
             groups.setdefault(mol_id, []).append(e)
+
+        self.log(f"Found {len(groups)} molecule groups")
         return groups
 
     # ------------------------------------------------------------
-    # Apply pruning to all molecules
+    # Pruning logic for a single molecule
     # ------------------------------------------------------------
-    def _prune_all(self, job, groups, strategy, strategy_params):
-        pruned = []
-        total_mols = len(groups)
+    def _prune_group(self, mol_id, conformers, params):
+        """
+        Returns:
+            survivors: list of conformer dicts
+            summary_row: dict for pruning_summary.csv
+        """
 
-        for idx, (mol_id, conformers) in enumerate(groups.items(), start=1):
-            job.log_section(f"Molecule {idx}/{total_mols}: {mol_id}")
+        # Remove conformers with missing energies
+        valid = []
+        removed_missing_energy = 0
 
-            mol_start = time.perf_counter()
-            kept = self._apply_strategy(conformers, strategy, strategy_params)
-            elapsed = time.perf_counter() - mol_start
+        for e in conformers:
+            if e.get("energy") is None or (isinstance(e["energy"], float) and np.isnan(e["energy"])):
+                removed_missing_energy += 1
+                self.log(f"[WARNING] {mol_id}: conformer {e.get('lookup_id')} removed (missing energy)")
+            else:
+                valid.append(e)
 
-            job.log(f"{len(conformers)} → {len(kept)} retained", indent=1)
-            job.log(f"Completed in {elapsed:.2f} seconds", indent=1)
+        if not valid:
+            raise RuntimeError(f"All conformers for {mol_id} missing energies.")
 
-            pruned.extend(kept)
+        # Choose pruning strategy
+        strategy = params.get("pruning_strategy", "keep_lowest_n").lower()
 
-        return pruned
+        if strategy == "keep_lowest_n":
+            survivors = self._prune_keep_lowest_n(valid, params)
+
+        elif strategy == "energy_window":
+            survivors = self._prune_energy_window(valid, params)
+
+        elif strategy == "all":
+            survivors = valid
+
+        elif strategy == "rmsd":
+            survivors = self._prune_rmsd(valid, params)  # placeholder
+
+        else:
+            raise RuntimeError(f"Unknown pruning_strategy: {strategy}")
+
+        # Build summary row
+        summary_row = {
+            "molecule_id": mol_id,
+            "total_conformers": len(conformers),
+            "valid_energy_conformers": len(valid),
+            "removed_missing_energy": removed_missing_energy,
+            "kept_after_pruning": len(survivors),
+            "strategy": strategy,
+        }
+
+        return survivors, summary_row
 
     # ------------------------------------------------------------
-    # Strategy dispatcher
+    # Strategy: keep lowest N energies
     # ------------------------------------------------------------
-    def _apply_strategy(self, conformers, strategy, params):
-        if strategy == "top_n":
-            return self._top_n(conformers, params.get("n"))
-
-        if strategy == "energy_window":
-            return self._energy_window(conformers, params.get("threshold"))
-
-        if strategy == "rmsd":
-            return conformers  # placeholder
-
-        raise ValueError(f"Unknown pruning strategy: {strategy}")
+    def _prune_keep_lowest_n(self, conformers, params):
+        n = params.get("n", 5)
+        sorted_conf = sorted(conformers, key=lambda e: e["energy"])
+        return sorted_conf[:n]
 
     # ------------------------------------------------------------
-    # Strategies
+    # Strategy: keep all within ΔE of minimum
     # ------------------------------------------------------------
-    def _top_n(self, conformers, n):
-        if n is None:
-            raise ValueError("top_n strategy requires parameter 'n'")
-        return sorted(conformers, key=lambda e: e["energy"])[:n]
+    def _prune_energy_window(self, conformers, params):
+        window = params.get("pruning_energy_window", 5.0)  # kcal/mol
+        sorted_conf = sorted(conformers, key=lambda e: e["energy"])
+        min_e = sorted_conf[0]["energy"]
+        return [e for e in sorted_conf if (e["energy"] - min_e) <= window]
 
-    def _energy_window(self, conformers, threshold):
-        if threshold is None:
-            raise ValueError("energy_window strategy requires 'threshold'")
-        sorted_group = sorted(conformers, key=lambda e: e["energy"])
-        min_energy = sorted_group[0]["energy"]
-        return [e for e in sorted_group if e["energy"] <= min_energy + threshold]
+    # ------------------------------------------------------------
+    # Strategy: RMSD clustering (placeholder)
+    # ------------------------------------------------------------
+    def _prune_rmsd(self, conformers, params):
+        self.log("[WARNING] RMSD pruning not implemented; keeping all conformers")
+        return conformers
 
     # ------------------------------------------------------------
     # Write outputs
     # ------------------------------------------------------------
-    def _write_outputs(self, job, pruned, params, missing):
-        outputs_dir = job.outputs_dir
-        outputs_xyz_dir = os.path.join(outputs_dir, "xyz")
-
-        # Copy XYZs
-        for entry in pruned:
-            src = entry["xyz_path"]
-            dst = os.path.join(outputs_xyz_dir, os.path.basename(src))
-            shutil.copy(src, dst)
-            entry["xyz_path"] = dst
-
-        # summary.csv
-        summary_path = os.path.join(outputs_dir, "summary.csv")
-        df = pd.DataFrame(
-            [
-                {
-                    "lookup_id": e["lookup_id"],
-                    "energy": e["energy"],
-                    "xyz_path": e["xyz_path"],
-                    "log_path": e["log_path"],
-                }
-                for e in pruned
-            ]
-        )
-        df.to_csv(summary_path, index=False)
+    def _write_outputs(self, pruned_entries, summary_rows):
+        outputs_dir = self.outputs_dir
 
         # energies.json
-        pruned_energies_path = os.path.join(outputs_dir, "energies.json")
-        with AtomicWriter(pruned_energies_path) as f:
-            json.dump(pruned, f, indent=2)
+        energies_path = os.path.join(outputs_dir, "energies.json")
+        with AtomicWriter(energies_path) as f:
+            json.dump(pruned_entries, f, indent=2)
 
-        # job_state.json
-        job_state_path = os.path.join(job.job_dir, "job_state.json")
-        with AtomicWriter(job_state_path) as f:
-            json.dump(
-                {
-                    "stage": "pruning",
-                    "strategy": params.get("strategy"),
-                    "strategy_params": params.get("strategy_params"),
-                    "input_energies": params.get("summary_file"),
-                    "num_input": len(pruned) + len(missing),
-                    "num_output": len(pruned),
-                    "missing_xyz": missing,
-                },
-                f,
-                indent=2,
-            )
+        # pruning_summary.csv
+        summary_path = os.path.join(outputs_dir, "pruning_summary.csv")
+        df = pd.DataFrame(summary_rows)
+
+        df = df[
+            [
+                "molecule_id",
+                "total_conformers",
+                "valid_energy_conformers",
+                "removed_missing_energy",
+                "kept_after_pruning",
+                "strategy",
+            ]
+        ]
+
+        with AtomicWriter(summary_path) as f:
+            df.to_csv(f, index=False)
+
+        self.log(f"Pruned energies written to: {energies_path}")
+        self.log(f"Pruning summary written to: {summary_path}")

@@ -11,19 +11,36 @@ from modules.execution.pipeline_runner import PipelineRunner
 
 def main():
     base_dir = os.path.abspath("pipeline_data")
-    input_csv = os.path.join(base_dir, "input_data", "test_3_mols.csv")
 
+    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t2.csv"
 
     # Declarative pipeline specification
     pipeline_spec = [
+
+        {
+            "stage": "cleaning",
+            "args": {
+                "input_csv": input_csv,
+                "num_confs": 25,
+                "seed": 42,
+                "engine": "rdkit",
+            },
+        },
+        # --------------------------------------------------------
+        # 1. RDKit conformer generation (25)
+        # --------------------------------------------------------
         {
             "stage": "generation",
             "args": {
-                "input_csv": input_csv,
-                "num_confs": 30,
+                "num_confs": 25,
                 "seed": 42,
+                "engine": "rdkit",
             },
         },
+
+        # --------------------------------------------------------
+        # 2. Prune to top 3
+        # --------------------------------------------------------
         {
             "stage": "pruning",
             "args": {
@@ -31,6 +48,10 @@ def main():
                 "strategy_params": {"n": 3},
             },
         },
+
+        # --------------------------------------------------------
+        # 3. gXTB optimisation
+        # --------------------------------------------------------
         {
             "stage": "optimisation",
             "args": {
@@ -38,22 +59,56 @@ def main():
                 "max_iter": 250,
             },
         },
+
+        # --------------------------------------------------------
+        # 4. Prune to top 1
+        # --------------------------------------------------------
+        {
+            "stage": "pruning",
+            "args": {
+                "strategy": "top_n",
+                "strategy_params": {"n": 1},
+            },
+        },
+
+        # --------------------------------------------------------
+        # 5. DFT optimisation (ORCA)
+        # --------------------------------------------------------
+#        {
+#            "stage": "optimisation",
+#             "args": {
+#                 "engine": "orca_final",
+#                 "max_iter": 250,
+#             },
+#         },
+
+        # --------------------------------------------------------
+        # 6. ORCA COSMO calculation
+        # --------------------------------------------------------
+        {
+            "stage": "orcacosmo",
+            "args": {
+                "orca_command": "orca",
+                "do_optimization": False,  # Already optimized with gXTB
+                "calculate_polarizabilities": True,  # Can set False to skip if needed
+            },
+        },
     ]
 
     # Global request parameters
     parameters = {
-        "title": "test_3_mols_detached",
-        "detached": True,  # run in background
+        "title": "acr_t5_full_pipeline",
+        "detached": False,  # run in background
         "resources": {
-            "cpus": 19,
-            "memory_gb": 32,
+            "cpus": 20,
+            "memory_gb": 64,
         },
     }
 
     # Create the Request
     req = Request.create_new(
         base_dir=base_dir,
-        dataset="test_3_mols",
+        dataset="acr_t5",
         pipeline_spec=pipeline_spec,
         parameters=parameters,
     )

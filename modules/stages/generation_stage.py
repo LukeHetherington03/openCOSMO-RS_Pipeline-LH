@@ -1,296 +1,256 @@
 import os
 import json
 import time
-import shutil
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
+from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 
 
-GENERATION_METHODS = {
-    "rdkit": {"runner": "_generate_rdkit"},
-    "babel": {"runner": "_generate_babel"},
-    "crest": {"runner": "_generate_crest"},
+GENERATION_BACKENDS = {
+    "rdkit": "_backend_rdkit",
+    "babel": "_backend_babel",
+    "crest": "_backend_crest",
 }
 
 
-class GenerationStage:
+class GenerationStage(BaseStage):
     """
-    Generation stage:
-      - Accepts one or more CSVs
-      - Copies them into inputs/
-      - Loads + concatenates them
-      - Validates molecules
-      - Generates conformers using selected engine
-      - Writes energies.json, summary.csv, xyz/
+    Clean, unified conformer generation stage.
+
+    Responsibilities:
+      - Load + validate cleaned dataset (summary_file)
+      - Canonicalise SMILES
+      - Generate conformers using selected backend
+      - Write:
+          - xyz/ files
+          - summary.csv
+          - energies.json
     """
 
     # ------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------
-    def run(self, job):
-        params = job.parameters
+    def execute(self):
+        self.log_header("Starting Generation Stage")
 
-        input_csvs = params.get("input_csv")
+        params = self.parameters
+
+        # ------------------------------------------------------------
+        # NEW: Use summary_file from CleaningStage
+        # ------------------------------------------------------------
+        summary_file = params.get("summary_file")
+        if summary_file is None:
+            self.fail("GenerationStage requires summary_file produced by CleaningStage.")
+
+        if not os.path.isfile(summary_file):
+            self.fail(f"summary_file does not exist: {summary_file}")
+
+        input_csvs = [summary_file]  # keep interface consistent
+
         num_confs = params.get("num_confs", 5)
         seed = params.get("seed", 42)
-        engine = params.get("engine", "rdkit").lower()
+        backend = params.get("engine", "rdkit").lower()
 
-        # Normalise CSV list
-        if isinstance(input_csvs, str):
-            input_csvs = [input_csvs]
-        if not input_csvs:
-            raise ValueError("GenerationStage requires at least one input CSV.")
-
-        job.log_header("Starting generation stage")
-        job.log(f"Engine: {engine}")
-        job.log(f"Input CSVs: {input_csvs}")
-        job.log(f"Requested: {num_confs} conformers per molecule")
+        self.log(f"Backend: {backend}")
+        self.log(f"Input summary file: {summary_file}")
+        self.log(f"Conformers per molecule: {num_confs}")
 
         # Prepare directories
-        inputs_dir, outputs_dir, xyz_out_dir, raw_out_dir = self._prepare_dirs(job)
+        dirs = self._prepare_directories()
 
-        # Copy CSVs
-        copied_csvs, missing_csvs = self._copy_csvs(job, input_csvs, inputs_dir)
-
-        # Load CSVs
-        df_all = self._load_csvs(job, copied_csvs)
+        # Load cleaned dataset
+        df_all = self._load_and_merge_csvs(input_csvs)
 
         # Validate molecules
-        valid_rows, invalid_rows = self._validate_molecules(job, df_all)
+        valid_rows = self._validate_and_canonicalise(df_all)
 
-        # Dispatch engine
-        results = self._dispatch_engine(
-            job, engine, valid_rows, num_confs, seed, xyz_out_dir
+        # Initialise job items (one per valid molecule)
+        self.set_items([idx for idx, _ in valid_rows])
+
+        # Dispatch backend
+        results = self._dispatch_backend(
+            backend=backend,
+            valid_rows=valid_rows,
+            num_confs=num_confs,
+            seed=seed,
+            xyz_out_dir=dirs["xyz"]
         )
 
         # Write outputs
         self._write_outputs(
-            job, results, outputs_dir,
-            input_csvs, copied_csvs, missing_csvs,
-            valid_rows, invalid_rows
+            results=results,
+            input_csvs=input_csvs,
+            dirs=dirs,
+            valid_rows=valid_rows,
+            total_rows=len(df_all)
         )
 
-        job.log_header("Generation complete")
-        job.log(f"{len(valid_rows)} valid molecules processed")
-        job.log(f"{len(results)} conformers generated")
-        job.log(f"Outputs written to: {outputs_dir}")
-
-        job.mark_complete()
+        self.log_header("Generation Stage Complete")
+        self.job.mark_complete()
 
     # ------------------------------------------------------------
-    # Directory setup
+    # Helpers: Input handling
     # ------------------------------------------------------------
-    def _prepare_dirs(self, job):
-        inputs_dir = job.inputs_dir
-        outputs_dir = job.outputs_dir
+    def _normalise_csv_list(self, csvs):
+        if isinstance(csvs, str):
+            return [csvs]
+        if not csvs:
+            self.fail("GenerationStage requires at least one input CSV.")
+        return csvs
 
-        xyz_out_dir = os.path.join(outputs_dir, "xyz")
-        raw_out_dir = os.path.join(outputs_dir, "raw")
+    def _prepare_directories(self):
+        dirs = {
+            "inputs": self.inputs_dir,
+            "outputs": self.outputs_dir,
+            "xyz": os.path.join(self.outputs_dir, "xyz"),
+            "raw": os.path.join(self.outputs_dir, "raw"),
+        }
+        for d in dirs.values():
+            os.makedirs(d, exist_ok=True)
+        return dirs
 
-        os.makedirs(xyz_out_dir, exist_ok=True)
-        os.makedirs(raw_out_dir, exist_ok=True)
-
-        return inputs_dir, outputs_dir, xyz_out_dir, raw_out_dir
-
-    # ------------------------------------------------------------
-    # Copy CSVs
-    # ------------------------------------------------------------
-    def _copy_csvs(self, job, input_csvs, inputs_dir):
-        copied_csvs = []
-        missing_csvs = []
-
-        for csv_path in input_csvs:
-            if os.path.exists(csv_path):
-                dst = os.path.join(inputs_dir, os.path.basename(csv_path))
-                shutil.copy(csv_path, dst)
-                copied_csvs.append(dst)
-            else:
-                missing_csvs.append(csv_path)
-
-        if len(copied_csvs) == 0:
-            raise ValueError(f"None of the provided CSVs exist. Missing: {missing_csvs}")
-
-        if missing_csvs:
-            job.log("[WARNING] Missing CSVs:")
-            for m in missing_csvs:
-                job.log(f"  - {m}", indent=2)
-
-        return copied_csvs, missing_csvs
-
-    # ------------------------------------------------------------
-    # Load CSVs
-    # ------------------------------------------------------------
-    def _load_csvs(self, job, copied_csvs):
+    def _load_and_merge_csvs(self, csv_paths):
         dfs = []
-        for csv in copied_csvs:
+
+        for path in csv_paths:
+            if not os.path.exists(path):
+                self.log(f"[WARNING] Missing CSV: {path}")
+                continue
             try:
-                df = pd.read_csv(csv)
+                df = pd.read_csv(path)
                 dfs.append(df)
             except Exception as e:
-                job.log(f"[WARNING] Failed to load {csv}: {e}")
+                self.log(f"[WARNING] Failed to load {path}: {e}")
 
-        if len(dfs) == 0:
-            raise ValueError("No CSVs could be loaded successfully.")
+        if not dfs:
+            self.fail("No valid CSVs loaded.")
 
-        df_all = pd.concat(dfs, ignore_index=True)
-        job.log(f"Loaded {len(df_all)} rows from CSVs")
-
-        return df_all
+        merged = pd.concat(dfs, ignore_index=True)
+        self.log(f"Loaded {len(merged)} rows from CSVs")
+        return merged
 
     # ------------------------------------------------------------
-    # Validate molecules
+    # Helpers: Molecule validation
     # ------------------------------------------------------------
-    def _validate_molecules(self, job, df_all):
-        valid_rows = []
-        invalid_rows = []
+    def _validate_and_canonicalise(self, df):
+        valid = []
 
-        for idx, row in df_all.iterrows():
+        for idx, row in df.iterrows():
             smiles = row.get("smiles") or row.get("SMILES") or row.get("mol")
             if not smiles:
-                invalid_rows.append(idx)
                 continue
 
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
-                invalid_rows.append(idx)
                 continue
 
-            valid_rows.append((idx, smiles))
+            smiles = Chem.MolToSmiles(mol, canonical=True)
+            valid.append((idx, smiles))
 
-        job.log(f"Valid molecules: {len(valid_rows)}")
-        if invalid_rows:
-            job.log(f"[WARNING] {len(invalid_rows)} invalid molecule rows skipped")
-
-        return valid_rows, invalid_rows
+        self.log(f"Valid molecules: {len(valid)}")
+        return valid
 
     # ------------------------------------------------------------
-    # Engine dispatch
+    # Backend dispatch
     # ------------------------------------------------------------
-    def _dispatch_engine(self, job, engine, valid_rows, num_confs, seed, xyz_out_dir):
-        if engine not in GENERATION_METHODS:
-            raise ValueError(f"Unknown generation engine: {engine}")
+    def _dispatch_backend(self, backend, valid_rows, num_confs, seed, xyz_out_dir):
 
-        runner = getattr(self, GENERATION_METHODS[engine]["runner"])
-        return runner(job, valid_rows, num_confs, seed, xyz_out_dir)
+        if backend not in GENERATION_BACKENDS:
+            self.fail(f"Unknown backend: {backend}")
+
+        runner_name = GENERATION_BACKENDS[backend]
+        runner = getattr(self, runner_name)
+
+        self.log_section(f"Running backend: {backend}")
+        return runner(valid_rows, num_confs, seed, xyz_out_dir)
 
     # ------------------------------------------------------------
-    # RDKit backend (default)
+    # Backend: RDKit
     # ------------------------------------------------------------
-    def _generate_rdkit(self, job, valid_rows, num_confs, seed, xyz_out_dir):
-        results = []
-        total_mols = len(valid_rows)
-        global_start = time.perf_counter()
-        total_confs = 0
-
-        for mol_idx, (row_idx, smiles) in enumerate(valid_rows, start=1):
-            job.log_section(f"Molecule {mol_idx}/{total_mols}: {smiles}")
-
-            mol_start = time.perf_counter()
-            mol_results = self._generate_rdkit_for_molecule(
-                job, smiles, row_idx, num_confs, seed, xyz_out_dir
-            )
-
-            elapsed = time.perf_counter() - mol_start
-            total_confs += len(mol_results)
-
-            job.log(f"Generated {len(mol_results)} conformers in {elapsed:.2f} seconds", indent=1)
-            job.log(f"Total so far: {total_confs}", indent=1)
-
-            results.extend(mol_results)
-
-        stage_elapsed = time.perf_counter() - global_start
-        job.log(f"RDKit generation time: {stage_elapsed:.2f} seconds")
-
-        return results
-
-    def _generate_rdkit_for_molecule(self, job, smiles, row_idx, num_confs, seed, xyz_out_dir):
+    def _backend_rdkit(self, valid_rows, num_confs, seed, xyz_out_dir):
         results = []
 
-        mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+        for idx, smiles in valid_rows:
+            self.log_section(f"Generating for SMILES: {smiles}")
 
-        params = AllChem.ETKDGv3()
-        params.randomSeed = seed
+            mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+            params = AllChem.ETKDGv3()
+            params.randomSeed = seed
 
-        try:
-            conf_ids = AllChem.EmbedMultipleConfs(mol, num_confs, params)
-        except Exception as e:
-            job.log(f"[WARNING] Failed to generate conformers for {smiles}: {e}", indent=1)
-            return results
-
-        for conf_id in conf_ids:
             try:
-                AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
-                energy = AllChem.UFFGetMoleculeForceField(mol, confId=conf_id).CalcEnergy()
+                conf_ids = AllChem.EmbedMultipleConfs(mol, num_confs, params)
             except Exception as e:
-                job.log(f"[WARNING] UFF optimisation failed for {smiles}: {e}", indent=2)
+                self.log(f"[WARNING] RDKit embedding failed: {e}")
+                self.update_progress(idx, success=False)
                 continue
 
-            inchi_key = Chem.inchi.MolToInchiKey(mol)
-            lookup_id = f"{inchi_key}_conf{conf_id}"
+            for conf_id in conf_ids:
+                try:
+                    AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
+                    energy = AllChem.UFFGetMoleculeForceField(mol, confId=conf_id).CalcEnergy()
+                except Exception as e:
+                    self.log(f"[WARNING] UFF optimisation failed: {e}")
+                    continue
 
-            xyz_path = os.path.join(xyz_out_dir, f"{lookup_id}.xyz")
-            self._write_xyz(mol, conf_id, xyz_path)
+                inchi_key = Chem.inchi.MolToInchiKey(mol)
+                lookup_id = f"{inchi_key}_conf{conf_id:03d}"
 
-            results.append({
-                "lookup_id": lookup_id,
-                "energy": energy,
-                "xyz_path": xyz_path,
-                "log_path": None,
-                "metadata": {
-                    "smiles": smiles,
-                    "source_row": int(row_idx),
-                }
-            })
+                xyz_path = os.path.join(xyz_out_dir, f"{lookup_id}.xyz")
+                self._write_xyz(mol, conf_id, xyz_path)
+
+                results.append({
+                    "lookup_id": lookup_id,
+                    "energy": energy,
+                    "xyz_path": xyz_path,
+                    "metadata": {
+                        "smiles": smiles,
+                        "source_row": int(idx),
+                    }
+                })
+
+            self.update_progress(idx)
 
         return results
 
     # ------------------------------------------------------------
-    # OpenBabel backend (placeholder)
+    # Backend placeholders
     # ------------------------------------------------------------
-    def _generate_babel(self, job, valid_rows, num_confs, seed, xyz_out_dir):
-        job.log("[ERROR] OpenBabel generation not implemented yet.")
-        raise NotImplementedError("OpenBabel generation not implemented yet.")
+    def _backend_babel(self, *args, **kwargs):
+        self.fail("OpenBabel backend not implemented yet.")
+
+    def _backend_crest(self, *args, **kwargs):
+        self.fail("CREST backend not implemented yet.")
 
     # ------------------------------------------------------------
-    # CREST backend (placeholder)
+    # Helpers: Output writing
     # ------------------------------------------------------------
-    def _generate_crest(self, job, valid_rows, num_confs, seed, xyz_out_dir):
-        job.log("[ERROR] CREST generation not implemented yet.")
-        raise NotImplementedError("CREST generation not implemented yet.")
+    def _write_outputs(self, results, input_csvs, dirs, valid_rows, total_rows):
 
-    # ------------------------------------------------------------
-    # Write outputs
-    # ------------------------------------------------------------
-    def _write_outputs(self, job, results, outputs_dir,
-                       input_csvs, copied_csvs, missing_csvs,
-                       valid_rows, invalid_rows):
-
-        if len(results) == 0:
-            raise ValueError("Generation produced zero conformers.")
+        if not results:
+            self.fail("Generation produced zero conformers.")
 
         # summary.csv
-        summary_path = os.path.join(outputs_dir, "summary.csv")
-        pd.DataFrame(results).to_csv(summary_path, index=False)
+        summary_path = os.path.join(dirs["outputs"], "summary.csv")
+        with AtomicWriter(summary_path) as f:
+            pd.DataFrame(results).to_csv(f, index=False)
 
         # energies.json
-        energies_path = os.path.join(outputs_dir, "energies.json")
+        energies_path = os.path.join(dirs["outputs"], "energies.json")
         with AtomicWriter(energies_path) as f:
             json.dump(results, f, indent=2)
 
         # job_state.json
-        job_state_path = os.path.join(job.job_dir, "job_state.json")
+        job_state_path = os.path.join(self.job.job_dir, "job_state.json")
         with AtomicWriter(job_state_path) as f:
             json.dump(
                 {
                     "stage": "generation",
                     "num_input_csvs": len(input_csvs),
-                    "num_copied_csvs": len(copied_csvs),
-                    "missing_csvs": missing_csvs,
                     "num_valid_molecules": len(valid_rows),
-                    "num_invalid_molecules": len(invalid_rows),
+                    "num_total_rows": total_rows,
                     "num_conformers": len(results),
                 },
                 f,
@@ -298,7 +258,7 @@ class GenerationStage:
             )
 
     # ------------------------------------------------------------
-    # XYZ writer
+    # Helpers: XYZ writer
     # ------------------------------------------------------------
     def _write_xyz(self, mol, conf_id, path):
         atoms = mol.GetAtoms()
@@ -309,6 +269,4 @@ class GenerationStage:
             f.write("Generated by GenerationStage\n")
             for atom in atoms:
                 pos = conf.GetAtomPosition(atom.GetIdx())
-                f.write(
-                    f"{atom.GetSymbol()} {pos.x:.6f} {pos.y:.6f} {pos.z:.6f}\n"
-                )
+                f.write(f"{atom.GetSymbol()} {pos.x:.6f} {pos.y:.6f} {pos.z:.6f}\n")
