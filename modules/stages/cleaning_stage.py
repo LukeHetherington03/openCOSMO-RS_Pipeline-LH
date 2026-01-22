@@ -9,8 +9,8 @@ from modules.stages.base_stage import BaseStage
 
 STANDARD_NAMES = {
     "experimental solubility /mol frac": "experimental_solubility_mol_frac",
-    "melting point": "melting_point",
-    "melting point source": "melting_point_source",
+    "melting point": "melting_temp",
+    "melting point source": "melting_temp_source",
     "mol_id": "mol_id",
     "pubchem_sid": "pubchem_sid",
     "mol_name": "mol_name_iupac",

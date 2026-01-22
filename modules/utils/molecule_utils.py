@@ -1,6 +1,10 @@
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem import rdmolops
+from rdkit.Chem import rdchem
+from rdkit.Chem import rdDetermineBonds
+
+
 
 class MoleculeUtils:
     """
@@ -71,3 +75,69 @@ class MoleculeUtils:
             "inchi": inchi,
             "smiles": Chem.MolToSmiles(mol),
     }
+
+
+    @staticmethod
+    def adjacency_from_smiles(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+
+        n = mol.GetNumAtoms()
+        adj = [[0]*n for _ in range(n)]
+
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            adj[i][j] = 1
+            adj[j][i] = 1
+
+        return adj
+
+
+
+    @staticmethod
+    def mol_from_xyz(xyz_atoms):
+        """
+        Build an RDKit molecule from XYZ atoms.
+        xyz_atoms = [(element, x, y, z), ...]
+        """
+        mol = rdchem.RWMol()
+        conf = Chem.Conformer(len(xyz_atoms))
+
+        atom_indices = []
+
+        for i, (el, x, y, z) in enumerate(xyz_atoms):
+            atom = Chem.Atom(el)
+            idx = mol.AddAtom(atom)
+            atom_indices.append(idx)
+            conf.SetAtomPosition(idx, (x, y, z))
+
+        mol.AddConformer(conf)
+
+        return mol
+
+
+
+    @staticmethod
+    def mol_from_xyz(xyz_atoms):
+        mol = rdchem.RWMol()
+        conf = Chem.Conformer(len(xyz_atoms))
+
+        for i, (el, x, y, z) in enumerate(xyz_atoms):
+            idx = mol.AddAtom(Chem.Atom(el))
+            conf.SetAtomPosition(idx, (x, y, z))
+
+        mol.AddConformer(conf)
+
+        # Let RDKit guess bonds from geometry
+        rdDetermineBonds.DetermineBonds(mol)
+
+        return mol
+
+
+    @staticmethod
+    def adjacency_from_xyz(xyz_atoms):
+        mol = MoleculeUtils.mol_from_xyz(xyz_atoms)
+        adj = rdmolops.GetAdjacencyMatrix(mol, useBO=True)
+        return adj

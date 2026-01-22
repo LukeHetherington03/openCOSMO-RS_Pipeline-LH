@@ -7,12 +7,17 @@
 import os
 from modules.provenance.request_manager import Request
 from modules.execution.pipeline_runner import PipelineRunner
-
+import json
 
 def main():
+    config_path = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/paths.json"
+    with open(config_path) as f:
+        config = json.load(f)
+
+
     base_dir = os.path.abspath("pipeline_data")
 
-    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t2.csv"
+    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv"
 
     # Declarative pipeline specification
     pipeline_spec = [
@@ -21,37 +26,28 @@ def main():
             "stage": "cleaning",
             "args": {
                 "input_csv": input_csv,
-                "num_confs": 25,
-                "seed": 42,
-                "engine": "rdkit",
-            },
-        },
-        # --------------------------------------------------------
-        # 1. RDKit conformer generation (25)
-        # --------------------------------------------------------
-        {
-            "stage": "generation",
-            "args": {
-                "num_confs": 25,
                 "seed": 42,
                 "engine": "rdkit",
             },
         },
 
-        # --------------------------------------------------------
-        # 2. Prune to top 3
-        # --------------------------------------------------------
+        {
+            "stage": "generation",
+            "args": {
+                "num_confs": 100,
+                "seed": 42,
+                "engine": "rdkit",
+            },
+        },
+
         {
             "stage": "pruning",
             "args": {
                 "strategy": "top_n",
-                "strategy_params": {"n": 3},
+                "strategy_params": {"n": 10},
             },
         },
 
-        # --------------------------------------------------------
-        # 3. gXTB optimisation
-        # --------------------------------------------------------
         {
             "stage": "optimisation",
             "args": {
@@ -60,49 +56,57 @@ def main():
             },
         },
 
-        # --------------------------------------------------------
-        # 4. Prune to top 1
-        # --------------------------------------------------------
         {
             "stage": "pruning",
             "args": {
                 "strategy": "top_n",
-                "strategy_params": {"n": 1},
+                "strategy_params": {"n": 3},
             },
         },
 
-        # --------------------------------------------------------
-        # 5. DFT optimisation (ORCA)
-        # --------------------------------------------------------
-#        {
-#            "stage": "optimisation",
-#             "args": {
-#                 "engine": "orca_final",
-#                 "max_iter": 250,
-#             },
-#         },
+        {
+            "stage": "optimisation",
+            "args": {
+                "engine": "orca_final",
+                "max_iter": 250,
+            },
+        },
 
-        # --------------------------------------------------------
-        # 6. ORCA COSMO calculation
-        # --------------------------------------------------------
         {
             "stage": "orcacosmo",
             "args": {
                 "orca_command": "orca",
-                "do_optimization": False,  # Already optimized with gXTB
-                "calculate_polarizabilities": True,  # Can set False to skip if needed
+                "do_optimization": False,
+                "calculate_polarizabilities": True,
+            },
+        },
+
+        # --------------------------------------------------------
+        # 7. Solubility Stage (NEW)
+        # --------------------------------------------------------
+        {
+            "stage": "solubility",
+            "args": {
+                "opencosmo_binary": "openCOSMORS",
+                "solvent_name": "water",
+                "solvent_smiles": "O",
+                "temperature": 298.15,
+                "calculations": "all",
+                "SORcf": 1.0,
             },
         },
     ]
+                    
 
     # Global request parameters
     parameters = {
-        "title": "acr_t5_full_pipeline",
-        "detached": False,  # run in background
+        "title": "acr_t1_test",
+        "detached": False,
         "resources": {
             "cpus": 20,
             "memory_gb": 64,
         },
+        "config": config
     }
 
     # Create the Request

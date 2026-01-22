@@ -28,6 +28,8 @@ class GenerationStage(BaseStage):
           - xyz/ files
           - summary.csv
           - energies.json
+          - molecule_metadata/<InChIKey>.json (job-local)
+          - GLOBAL_METADATA_DIR/<InChIKey>.json (global, no overwrite)
     """
 
     # ------------------------------------------------------------
@@ -36,11 +38,19 @@ class GenerationStage(BaseStage):
     def execute(self):
         self.log_header("Starting Generation Stage")
 
+        # --------------------------------------------------------
+        # Load config from request → job → stage
+        # --------------------------------------------------------
+        cfg = self.config
+        if not cfg:
+            self.fail("GenerationStage: missing config in job.config")
+
+        # Global metadata directory
+        self.GLOBAL_METADATA_DIR = cfg["constant_files"]["metadata_dir"]
+        os.makedirs(self.GLOBAL_METADATA_DIR, exist_ok=True)
+
         params = self.parameters
 
-        # ------------------------------------------------------------
-        # NEW: Use summary_file from CleaningStage
-        # ------------------------------------------------------------
         summary_file = params.get("summary_file")
         if summary_file is None:
             self.fail("GenerationStage requires summary_file produced by CleaningStage.")
@@ -48,7 +58,7 @@ class GenerationStage(BaseStage):
         if not os.path.isfile(summary_file):
             self.fail(f"summary_file does not exist: {summary_file}")
 
-        input_csvs = [summary_file]  # keep interface consistent
+        input_csvs = [summary_file]
 
         num_confs = params.get("num_confs", 5)
         seed = params.get("seed", 42)
@@ -67,7 +77,7 @@ class GenerationStage(BaseStage):
         # Validate molecules
         valid_rows = self._validate_and_canonicalise(df_all)
 
-        # Initialise job items (one per valid molecule)
+        # Initialise job items
         self.set_items([idx for idx, _ in valid_rows])
 
         # Dispatch backend
@@ -79,7 +89,7 @@ class GenerationStage(BaseStage):
             xyz_out_dir=dirs["xyz"]
         )
 
-        # Write outputs
+        # Write outputs + metadata templates
         self._write_outputs(
             results=results,
             input_csvs=input_csvs,
@@ -94,19 +104,13 @@ class GenerationStage(BaseStage):
     # ------------------------------------------------------------
     # Helpers: Input handling
     # ------------------------------------------------------------
-    def _normalise_csv_list(self, csvs):
-        if isinstance(csvs, str):
-            return [csvs]
-        if not csvs:
-            self.fail("GenerationStage requires at least one input CSV.")
-        return csvs
-
     def _prepare_directories(self):
         dirs = {
             "inputs": self.inputs_dir,
             "outputs": self.outputs_dir,
             "xyz": os.path.join(self.outputs_dir, "xyz"),
             "raw": os.path.join(self.outputs_dir, "raw"),
+            "metadata": os.path.join(self.outputs_dir, "molecule_metadata"),  # job-local
         }
         for d in dirs.values():
             os.makedirs(d, exist_ok=True)
@@ -187,6 +191,10 @@ class GenerationStage(BaseStage):
                 self.update_progress(idx, success=False)
                 continue
 
+            # Compute InChI + InChIKey once per molecule
+            inchi = Chem.inchi.MolToInchi(mol)
+            inchi_key = Chem.inchi.InchiToInchiKey(inchi)
+
             for conf_id in conf_ids:
                 try:
                     AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
@@ -195,7 +203,7 @@ class GenerationStage(BaseStage):
                     self.log(f"[WARNING] UFF optimisation failed: {e}")
                     continue
 
-                inchi_key = Chem.inchi.MolToInchiKey(mol)
+                # lookup_id now uses full InChIKey
                 lookup_id = f"{inchi_key}_conf{conf_id:03d}"
 
                 xyz_path = os.path.join(xyz_out_dir, f"{lookup_id}.xyz")
@@ -203,6 +211,8 @@ class GenerationStage(BaseStage):
 
                 results.append({
                     "lookup_id": lookup_id,
+                    "inchi": inchi,
+                    "inchi_key": inchi_key,
                     "energy": energy,
                     "xyz_path": xyz_path,
                     "metadata": {
@@ -214,15 +224,6 @@ class GenerationStage(BaseStage):
             self.update_progress(idx)
 
         return results
-
-    # ------------------------------------------------------------
-    # Backend placeholders
-    # ------------------------------------------------------------
-    def _backend_babel(self, *args, **kwargs):
-        self.fail("OpenBabel backend not implemented yet.")
-
-    def _backend_crest(self, *args, **kwargs):
-        self.fail("CREST backend not implemented yet.")
 
     # ------------------------------------------------------------
     # Helpers: Output writing
@@ -242,6 +243,9 @@ class GenerationStage(BaseStage):
         with AtomicWriter(energies_path) as f:
             json.dump(results, f, indent=2)
 
+        # Write molecule-level metadata templates
+        self._write_metadata_templates(results, dirs["metadata"])
+
         # job_state.json
         job_state_path = os.path.join(self.job.job_dir, "job_state.json")
         with AtomicWriter(job_state_path) as f:
@@ -256,6 +260,47 @@ class GenerationStage(BaseStage):
                 f,
                 indent=2,
             )
+
+    # ------------------------------------------------------------
+    # Write molecule metadata templates (job-local + global)
+    # ------------------------------------------------------------
+    def _write_metadata_templates(self, results, job_metadata_dir):
+
+        # Group by InChIKey (one template per molecule)
+        molecules = {}
+        for entry in results:
+            key = entry["inchi_key"]
+            molecules.setdefault(key, entry)
+
+        for inchi_key, entry in molecules.items():
+
+            template = {
+                "lookup_id": inchi_key,
+                "inchi_key": inchi_key,
+                "inchi": entry["inchi"],
+                "smiles": entry["metadata"]["smiles"],
+
+                # User-editable fields for solubility stage
+                "melting_temp": "N/A",
+                "Hfus": "N/A",
+                "Gfus_model": "MyrdalYalkowsky",
+
+                "notes": "Fill in melting point, Hfus, and Gfus model if known."
+            }
+
+            # 1. Write job-local metadata file
+            job_path = os.path.join(job_metadata_dir, f"{inchi_key}.json")
+            with AtomicWriter(job_path) as f:
+                json.dump(template, f, indent=2)
+
+            # 2. Write global metadata file ONLY IF NOT EXISTS
+            global_path = os.path.join(self.GLOBAL_METADATA_DIR, f"{inchi_key}.json")
+
+            if not os.path.exists(global_path):
+                with AtomicWriter(global_path) as f:
+                    json.dump(template, f, indent=2)
+            else:
+                self.log(f"[INFO] Global metadata exists, not overwriting: {global_path}")
 
     # ------------------------------------------------------------
     # Helpers: XYZ writer

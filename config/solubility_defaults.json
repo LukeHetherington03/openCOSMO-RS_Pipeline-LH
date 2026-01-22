@@ -1,0 +1,16 @@
+{
+  "calculation_type": "all",
+  "temperature": 298.15,
+
+  "saturation": {
+    "enabled": true,
+    "Gfus_mode": "MyrdalYalkowsky",
+    "Hfus": "N/A",
+    "SORcf": 0.5
+  },
+
+  "mixture": {
+    "default_multiplicity": 1,
+    "force_absolute_paths": true
+  }
+}

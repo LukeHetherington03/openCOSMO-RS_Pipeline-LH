@@ -35,6 +35,10 @@ class Request:
     def create_new(cls, base_dir, dataset, pipeline_spec, parameters=None):
         parameters = parameters or {}
 
+        # Extract config once and attach to request parameters
+        config = parameters.get("config", {})
+        parameters["config"] = config
+
         # Preserve order AND duplicates
         pipeline_sequence = [step["stage"] for step in pipeline_spec]
         stage_args = [step.get("args", {}) for step in pipeline_spec]
@@ -62,8 +66,10 @@ class Request:
         request.log(f"Host: {socket.gethostname()}")
         request.log(f"Pipeline sequence: {request.pipeline_sequence}")
 
-        # 4. Create first job (index 0) — unified logic
+        # 4. Create first job (index 0)
         first_stage = pipeline_sequence[0]
+
+        # Merge global request parameters + stage-specific args
         first_args = {**parameters, **stage_args[0]}
 
         job = Job.create_new(

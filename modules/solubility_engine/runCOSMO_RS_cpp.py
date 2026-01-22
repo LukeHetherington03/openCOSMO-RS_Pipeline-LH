@@ -816,5 +816,3 @@ else:
 
 end = datetime.datetime.now()
 print('time taken is ',end-start)
-
-

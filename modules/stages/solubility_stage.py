@@ -1,279 +1,320 @@
 import os
+import sys
 import json
-import subprocess
 import shutil
 from pathlib import Path
+import traceback
 
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
+from modules.solubility_engine.cosmors_wrapper import COSMORSWrapper
 
 
 class SolubilityStage(BaseStage):
-    """
-    Solubility stage using openCOSMO-RS:
-      - Reads orcacosmo_summary.json
-      - Creates mixture input files for openCOSMO-RS
-      - Runs solubility calculations
-      - Parses results into solubility_summary.json
-    """
 
     def execute(self):
         self.log_header("Starting Solubility Stage")
 
-        # Get openCOSMO-RS binary
-        self.opencosmo_binary = self.parameters.get("opencosmo_binary", "openCOSMORS")
-
-        # Solubility calculation parameters
-        self.temperature = self.parameters.get("temperature", 298.15)
-        self.solvent_name = self.parameters.get("solvent_name", "water")
-        self.solvent_cosmo_dir = self.parameters.get("solvent_cosmo_dir", "openCOSMO-RS_Pipeline-LH/CONSTANT_FILES")
-        self.solvent_smiles = self.parameters.get("solvent_smiles", "O")
-        
-        # Melting point parameters for solubility iteration
-        self.melting_temp = self.parameters.get("melting_temp", "N/A")
-        self.Gfus = self.parameters.get("Gfus", "N/A")
-        self.Hfus = self.parameters.get("Hfus", "N/A")
-        self.SORcf = self.parameters.get("SORcf", 1.0)
-        
-        # Calculation type
-        self.calculations = self.parameters.get("calculations", "all")  # 'all', 'pure_only', 'mixed_only'
-
-        if not self.solvent_cosmo_dir:
-            self.fail("solvent_cosmo_dir is required for solubility calculations")
-
-        if not os.path.exists(self.solvent_cosmo_dir):
-            self.fail(f"Solvent COSMO directory not found: {self.solvent_cosmo_dir}")
-
-        # Prepare directories
         self._prepare_directories()
-
-        # Load orcacosmo summary
+        self._load_stage_config()
         self._load_orcacosmo_summary()
+        self._load_wrapper()
 
-        # Discover solutes from summary
         solute_ids = [entry["lookup_id"] for entry in self.orcacosmo_entries]
         self.set_items(solute_ids)
 
-        # Track successful calculations
         self.successful_calcs = []
 
-        # Process each solute
         for lookup_id in list(self.job.pending_items):
             try:
                 self._process_solute(lookup_id)
-                self.log(f"Completed {lookup_id}")
                 self.update_progress(lookup_id)
             except Exception as e:
+                tb = traceback.format_exc()
                 self.log(f"[ERROR] {lookup_id}: {e}")
+                self._debug(f"Full traceback:\n{tb}")
                 self.update_progress(lookup_id, success=False)
 
-        # Write summary
         self._write_summary()
-
-        self.job.mark_complete()
         self.log_header("Solubility Stage Complete")
+        self.job.mark_complete()
+
+    # ------------------------------------------------------------
+    # Debug helper
+    # ------------------------------------------------------------
+    def _debug(self, msg: str):
+        self.log(f"[DEBUG] {msg}")
+        try:
+            with open(self.debug_log_path, "a") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # Directory setup
     # ------------------------------------------------------------
     def _prepare_directories(self):
-        self.workdir = os.path.join(self.outputs_dir, "opencosmo_workdir")
-        self.results_dir = os.path.join(self.outputs_dir, "results")
-        self.cosmo_copies_dir = os.path.join(self.outputs_dir, "cosmo_files")
+        self.cosmo_root = os.path.join(self.outputs_dir, "cosmo")
+        self.solute_cosmo_root = os.path.join(self.cosmo_root, "solute")
+        self.solvent_cosmo_root = os.path.join(self.cosmo_root, "solvent")
 
+        self.workdir = os.path.join(self.outputs_dir, "work")
+        self.results_dir = os.path.join(self.outputs_dir, "results")
+
+        logs_dir = os.path.join(self.job.job_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        self.debug_log_path = os.path.join(logs_dir, "solubility_debug.log")
+
+        os.makedirs(self.cosmo_root, exist_ok=True)
+        os.makedirs(self.solute_cosmo_root, exist_ok=True)
+        os.makedirs(self.solvent_cosmo_root, exist_ok=True)
         os.makedirs(self.workdir, exist_ok=True)
         os.makedirs(self.results_dir, exist_ok=True)
-        os.makedirs(self.cosmo_copies_dir, exist_ok=True)
 
-    # ------------------------------------------------------------
-    # Load orcacosmo summary
-    # ------------------------------------------------------------
-    def _load_orcacosmo_summary(self):
-        summary_file = self.parameters.get("summary_file")
-        if not summary_file:
-            self.fail("Solubility stage requires summary_file")
-
-        if not os.path.exists(summary_file):
-            self.fail(f"summary_file does not exist: {summary_file}")
-
-        with open(summary_file) as f:
-            self.orcacosmo_entries = json.load(f)
-
-        self.log(f"Loaded {len(self.orcacosmo_entries)} entries from orcacosmo summary")
-
-    # ------------------------------------------------------------
-    # Process single solute
-    # ------------------------------------------------------------
-    def _process_solute(self, lookup_id):
-        # Find entry in summary
-        entry = next((e for e in self.orcacosmo_entries if e["lookup_id"] == lookup_id), None)
-        if not entry:
-            raise ValueError(f"No entry found for {lookup_id}")
-
-        orcacosmo_path = entry["orcacosmo_path"]
-        if not os.path.exists(orcacosmo_path):
-            raise FileNotFoundError(f"ORCACOSMO file missing: {orcacosmo_path}")
-
-        # Copy .orcacosmo file to a dedicated directory structure
-        solute_cosmo_dir = os.path.join(self.cosmo_copies_dir, lookup_id)
-        os.makedirs(solute_cosmo_dir, exist_ok=True)
-        
-        dest_cosmo = os.path.join(solute_cosmo_dir, f"{lookup_id}.orcacosmo")
-        shutil.copy(orcacosmo_path, dest_cosmo)
-
-        # Get solute SMILES if available (optional)
-        solute_smiles = entry.get("smiles", "")
-
-        # Create openCOSMO-RS input file
-        input_file = os.path.join(self.workdir, f"{lookup_id}_input.txt")
-        self._write_opencosmo_input(
-            input_file,
-            lookup_id,
-            solute_cosmo_dir,
-            solute_smiles
+        self._debug(
+            f"Prepared directories: cosmo_root={self.cosmo_root}, "
+            f"workdir={self.workdir}, results_dir={self.results_dir}"
         )
 
-        # Run openCOSMO-RS
-        output_file = os.path.join(self.workdir, f"{lookup_id}_output.txt")
-        self._run_opencosmo(input_file, output_file)
+    # ------------------------------------------------------------
+    # Load config
+    # ------------------------------------------------------------
+    def _load_stage_config(self):
+        self.summary_file = self.parameters.get("summary_file")
+        if not self.summary_file:
+            self.fail("SolubilityStage requires 'summary_file' in parameters")
+        if not os.path.exists(self.summary_file):
+            self.fail(f"summary_file does not exist: {self.summary_file}")
 
-        # Parse results
-        results = self._parse_output(output_file, lookup_id)
+        cfg = self.config
+        if not cfg:
+            self.fail("SolubilityStage: missing config in job.config")
 
-        # Save results JSON
-        results_json = os.path.join(self.results_dir, f"{lookup_id}_solubility.json")
-        with AtomicWriter(results_json) as f:
-            json.dump(results, f, indent=2)
+        const_cfg = cfg.get("constant_files", {})
+        self.chemistry_dir = const_cfg.get("chemistry_dir")
+        self.metadata_dir = const_cfg.get("metadata_dir")
+        self.solvent_dir = const_cfg.get("solvent_dir")
+
+        sol_cfg = cfg.get("solubility", {})
+        defaults_file = sol_cfg.get("defaults")
+
+        with open(defaults_file) as f:
+            defaults = json.load(f)
+
+        self.default_solvent = defaults.get("default_solvent", "water")
+        self.default_temperature = defaults.get("default_temperature", 298.15)
+        self.default_SORcf = defaults.get("default_SORcf", 1.0)
+
+        self.solvent_name = self.parameters.get("solvent_name", self.default_solvent)
+        self.temperature = self.parameters.get("temperature", self.default_temperature)
+        self.SORcf = self.parameters.get("SORcf", self.default_SORcf)
+        self.calculations = self.parameters.get("calculations", "mixed_only")
+
+        self.GLOBAL_METADATA_DIR = self.metadata_dir
+        self.GLOBAL_SOLVENT_DIR = self.solvent_dir
+
+        self._debug(
+            f"Config loaded: solvent={self.solvent_name}, T={self.temperature}, "
+            f"SORcf={self.SORcf}, calculations={self.calculations}"
+        )
+
+    # ------------------------------------------------------------
+    # Load COSMO summary
+    # ------------------------------------------------------------
+    def _load_orcacosmo_summary(self):
+        with open(self.summary_file) as f:
+            raw_entries = json.load(f)
+
+        grouped = {}
+        for entry in raw_entries:
+            inchi_key = entry.get("inchi_key")
+            path = entry.get("orcacosmo_path")
+            if not inchi_key or not path:
+                continue
+            grouped.setdefault(inchi_key, []).append(path)
+
+        self.orcacosmo_entries = [
+            {
+                "lookup_id": inchi_key,
+                "inchi_key": inchi_key,
+                "conformer_paths": paths,
+            }
+            for inchi_key, paths in grouped.items()
+        ]
+
+    # ------------------------------------------------------------
+    # Load wrapper
+    # ------------------------------------------------------------
+    def _load_wrapper(self):
+        opencosmo_cfg = self.config.get("opencosmo", {})
+        self.wrapper = COSMORSWrapper(
+            config_path=self.config["solubility"]["defaults"],
+            opencosmo_paths=opencosmo_cfg,
+        )
+
+    # ------------------------------------------------------------
+    # Load metadata
+    # ------------------------------------------------------------
+    def _load_metadata(self, inchi_key):
+        global_path = os.path.join(self.GLOBAL_METADATA_DIR, f"{inchi_key}.json")
+        job_path = os.path.join(self.inputs_dir, "molecule_metadata", f"{inchi_key}.json")
+
+        if os.path.exists(global_path):
+            with open(global_path) as f:
+                return json.load(f)
+
+        if os.path.exists(job_path):
+            with open(job_path) as f:
+                return json.load(f)
+
+        return {
+            "lookup_id": inchi_key,
+            "melting_temp": "N/A",
+            "Hfus": "N/A",
+            "Gfus_model": "MyrdalYalkowsky",
+            "smiles": "",
+        }
+
+    # ------------------------------------------------------------
+    # Process a single solute
+    # ------------------------------------------------------------
+    def _process_solute(self, lookup_id):
+        entry = next((e for e in self.orcacosmo_entries if e["lookup_id"] == lookup_id), None)
+        if not entry:
+            raise ValueError(f"No COSMO entry found for {lookup_id}")
+
+        inchi_key = entry["inchi_key"]
+        conformer_paths = entry["conformer_paths"]
+        metadata = self._load_metadata(inchi_key)
+
+        solute_dir = self._copy_and_renumber_conformers(inchi_key, conformer_paths)
+        solvent_dir = self._copy_and_renumber_solvent()
+
+        # Run wrapper (now returns raw_output + result)
+        wrapper_out = self.wrapper.run(
+            job_dir=Path(self.workdir),
+            solute_name=inchi_key,
+            solute_smiles=metadata.get("smiles", ""),
+            solute_Tm=metadata.get("melting_temp", "N/A"),
+            solute_dir=Path(solute_dir),
+            solvent_name=self.solvent_name,
+            solvent_dir=Path(solvent_dir),
+        )
+
+        # ------------------------------------------------------------
+        # Write raw COSMO‑RS output
+        # ------------------------------------------------------------
+        raw_path = os.path.join(self.workdir, f"{inchi_key}_raw_output.txt")
+        with open(raw_path, "w") as f:
+            f.write(wrapper_out["raw_output"])
+
+        # ------------------------------------------------------------
+        # Write machine‑readable JSON
+        # ------------------------------------------------------------
+        out_json = os.path.join(self.results_dir, f"{inchi_key}_solubility.json")
+        with AtomicWriter(out_json) as f:
+            json.dump(
+                {
+                    "request_id": self.request.request_id,
+                    "job_id": self.job.job_id,
+                    "lookup_id": inchi_key,
+                    "inchi_key": inchi_key,
+                    "smiles": metadata.get("smiles", ""),
+                    "solvent": self.solvent_name,
+                    "temperature_K": self.temperature,
+                    "n_solute_confs": wrapper_out["n_solute"],
+                    "n_solvent_confs": wrapper_out["n_solvent"],
+                    "solubility_result": wrapper_out["result"],
+                    "raw_output_path": raw_path,
+                },
+                f,
+                indent=2,
+            )
+
+        # ------------------------------------------------------------
+        # Write human‑readable summary
+        # ------------------------------------------------------------
+        human_path = os.path.join(self.results_dir, f"{inchi_key}_summary.txt")
+        sol = wrapper_out["result"].get("x_solubility", None)
+
+        summary_txt = f"""
+Solubility Summary
+------------------
+Request: {self.request.request_id}
+Job: {self.job.job_id}
+
+Molecule: {inchi_key}
+SMILES: {metadata.get("smiles","")}
+Solvent: {self.solvent_name}
+Temperature: {self.temperature} K
+
+Mole fraction solubility: {sol}
+"""
+
+        with open(human_path, "w") as f:
+            f.write(summary_txt.strip() + "\n")
 
         # Track success
         self.successful_calcs.append({
-            "lookup_id": lookup_id,
-            "results_path": results_json,
-            "orcacosmo_path": orcacosmo_path,
-            **results
+            "inchi_key": inchi_key,
+            "solubility": sol,
+            "json": out_json,
+            "summary": human_path,
+            "raw_output": raw_path,
         })
 
     # ------------------------------------------------------------
-    # Write openCOSMO-RS input file
+    # Copy solute conformers
     # ------------------------------------------------------------
-    def _write_opencosmo_input(self, path, solute_name, solute_cosmo_dir, solute_smiles):
-        """
-        Write the openCOSMO-RS input format.
-        """
-        # Determine saturation parameter
-        if self.melting_temp != "N/A":
-            saturation_line = f"saturation {solute_name}"
-            if solute_smiles:
-                saturation_line += f" {solute_smiles}"
-        else:
-            saturation_line = "saturation no"
+    def _copy_and_renumber_conformers(self, inchi_key, conformer_paths):
+        out_dir = os.path.join(self.solute_cosmo_root, inchi_key)
+        os.makedirs(out_dir, exist_ok=True)
 
-        # Count number of .orcacosmo files in solute directory
-        n_solute_confs = len(list(Path(solute_cosmo_dir).glob("*.orcacosmo")))
-        
-        # Count solvent conformers
-        n_solvent_confs = len(list(Path(self.solvent_cosmo_dir).glob("*.orcacosmo")))
+        count = 0
+        for path in conformer_paths:
+            if not os.path.exists(path):
+                continue
+            new_name = f"{inchi_key}_c{count:03d}.orcacosmo"
+            shutil.copy(path, os.path.join(out_dir, new_name))
+            count += 1
 
-        # Generate multiplicity strings (all 1s)
-        solute_multiplicities = " ".join(["1"] * n_solute_confs)
-        solvent_multiplicities = " ".join(["1"] * n_solvent_confs)
+        if count == 0:
+            raise RuntimeError(f"No valid solute conformers found for {inchi_key}")
 
-        with open(path, "w") as f:
-            f.write(f"calculations {self.calculations}\n")
-            f.write(f"temperature {self.temperature}\n")
-            f.write(f"{saturation_line}\n")
-            f.write(f"meltingtemp {self.melting_temp}\n")
-            f.write(f"Gfus {self.Gfus}\n")
-            f.write(f"Hfus {self.Hfus}\n")
-            f.write(f"SORcf {self.SORcf}\n")
-            f.write("# name # mol fraction (of molecule) # path_to_dir # nconf # multiplicities\n")
-            
-            # Solute line
-            f.write(f"{solute_name}\t0.0\t{solute_cosmo_dir}\t{n_solute_confs}\t{solute_multiplicities}\n")
-            
-            # Solvent line
-            f.write(f"{self.solvent_name}\t1.0\t{self.solvent_cosmo_dir}\t{n_solvent_confs}\t{solvent_multiplicities}\n")
+        return out_dir
 
     # ------------------------------------------------------------
-    # Run openCOSMO-RS
+    # Copy solvent conformers
     # ------------------------------------------------------------
-    def _run_opencosmo(self, input_file, output_file):
-        """
-        Execute the openCOSMO-RS binary.
-        """
-        with open(output_file, "w") as f:
-            result = subprocess.run(
-                [self.opencosmo_binary, input_file],
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                check=False  # Don't raise on non-zero exit
-            )
+    def _copy_and_renumber_solvent(self):
+        solvent_path = os.path.join(self.GLOBAL_SOLVENT_DIR, self.solvent_name)
+        out_dir = os.path.join(self.solvent_cosmo_root, self.solvent_name)
+        os.makedirs(out_dir, exist_ok=True)
 
-        if result.returncode != 0:
-            # Log warning but don't fail - output file may still have useful info
-            self.log(f"[WARNING] openCOSMO-RS returned code {result.returncode}")
+        confs = sorted(Path(solvent_path).glob("*.orcacosmo"))
+        if not confs:
+            raise RuntimeError(f"No solvent conformers found in {solvent_path}")
 
-    # ------------------------------------------------------------
-    # Parse openCOSMO-RS output
-    # ------------------------------------------------------------
-    def _parse_output(self, output_file, lookup_id):
-        """
-        Parse openCOSMO-RS output file.
-        This is a basic parser - adjust based on actual output format.
-        """
-        results = {
-            "lookup_id": lookup_id,
-            "temperature": self.temperature,
-            "solvent": self.solvent_name,
-            "raw_output": None,
-            "activity_coefficient": None,
-            "solubility_mol_frac": None,
-            "solubility_g_L": None,
-        }
+        for i, path in enumerate(confs):
+            new_name = f"{self.solvent_name}_c{i:03d}.orcacosmo"
+            shutil.copy(path, os.path.join(out_dir, new_name))
 
-        if not os.path.exists(output_file):
-            return results
-
-        with open(output_file) as f:
-            output_text = f.read()
-            results["raw_output"] = output_text
-
-        # Parse key values from output
-        # TODO: Adjust these parsers based on actual openCOSMO-RS output format
-        for line in output_text.split('\n'):
-            line = line.strip()
-            
-            # Example parsing - adjust to match actual output
-            if "activity coefficient" in line.lower():
-                try:
-                    results["activity_coefficient"] = float(line.split()[-1])
-                except (ValueError, IndexError):
-                    pass
-            
-            if "solubility" in line.lower() and "mol/mol" in line.lower():
-                try:
-                    results["solubility_mol_frac"] = float(line.split()[-1])
-                except (ValueError, IndexError):
-                    pass
-            
-            if "solubility" in line.lower() and "g/L" in line.lower():
-                try:
-                    results["solubility_g_L"] = float(line.split()[-1])
-                except (ValueError, IndexError):
-                    pass
-
-        return results
+        return out_dir
 
     # ------------------------------------------------------------
-    # Write summary
+    # Write global summary
     # ------------------------------------------------------------
     def _write_summary(self):
-        """
-        Write solubility_summary.json for potential downstream stages.
-        """
         summary_path = os.path.join(self.outputs_dir, "solubility_summary.json")
-        
         with AtomicWriter(summary_path) as f:
-            json.dump(self.successful_calcs, f, indent=2)
-        
-        self.log(f"Wrote summary with {len(self.successful_calcs)} entries: {summary_path}")
+            json.dump(
+                {
+                    "request_id": self.job.get_request_id(),
+                    "job_id": self.get_job_id(),
+                    "n_molecules": len(self.successful_calcs),
+                    "results": self.successful_calcs,
+                },
+                f,
+                indent=2,
+            )
+        self.log(f"Wrote solubility summary: {summary_path}")

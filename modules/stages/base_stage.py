@@ -18,6 +18,8 @@ class BaseStage:
         self.inputs_dir = job.inputs_dir
         self.outputs_dir = job.outputs_dir
         self.parameters = job.parameters
+        self.config = job.config
+
 
     # ------------------------------------------------------------
     # Unified lifecycle wrapper

@@ -1,21 +1,49 @@
 {
-  "_comment": "Environment paths configuration for openCOSMO-RS Pipeline",
-  "_note": "Paths point to actual executables, not just directories",
+  "_comment": "Global configuration for openCOSMO-RS Pipeline",
+  "_note": "All paths are absolute and point to real executables or directories",
 
-  "gxtb_home": "/home/lunet/cglh4/software/g-xtb-main",
-  "gxtb_executable": "/home/lunet/cglh4/software/g-xtb-main/binary/gxtb",
-  
-  "xtb_home": "/home/lunet/cglh4/software/xtb-dist",
-  "xtb_executable": "/home/lunet/cglh4/software/xtb-dist/bin/xtb",
-  
-  "orca_home": "/home/lunet/cglh4/software/orca_6_1_1",
-  "orca_executable": "/home/lunet/cglh4/software/orca_6_1_1/orca",
-  
-  "opencosmo_home": "/home/lunet/cglh4/resources/openCOSMO-RS_py-git",
-  "opencosmo_python_src": "/home/lunet/cglh4/resources/openCOSMO-RS_py-git/src",
-  
-  "opencosmo_cpp_bindings": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp-git/bindings",
-  "opencosmo_binary": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp-git/bindings/openCOSMORS",
-  
-  "constant_files_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES"
+  "gxtb": {
+    "home": "/home/lunet/cglh4/software/g-xtb-main",
+    "executable": "/home/lunet/cglh4/software/g-xtb-main/binary/gxtb"
+  },
+
+  "xtb": {
+    "home": "/home/lunet/cglh4/software/xtb",
+    "executable": "/home/lunet/cglh4/software/xtb/bin/xtb"
+  },
+
+  "orca": {
+    "home": "/home/lunet/cglh4/software/orca_6_1_1",
+    "executable": "/home/lunet/cglh4/software/orca_6_1_1/orca"
+  },
+
+  "orca_6_0_0": { 
+    "home": "/home/lunet/cglh4/software/orca_6_0_0", 
+    "executable": "/home/lunet/cglh4/software/orca_6_0_0/orca" 
+  },
+
+  "opencosmo": {
+    "python_home": "/home/lunet/cglh4/resources/openCOSMO-RS_py",
+    "python_src": "/home/lunet/cglh4/resources/openCOSMO-RS_py/src",
+
+    "cpp_bindings": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp/bindings",
+    "binary": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp/bindings/openCOSMORS",
+
+    "shared_object": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp/bindings/openCOSMORS.cpython-310-x86_64-linux-gnu.so"
+  },
+
+  "constant_files": {
+    "root": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES",
+
+    "metadata_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/molecule_metadata",
+    "solvent_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/solvents",
+
+    "chemistry_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/chemistry"
+    },
+
+    "solubility": {
+      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/solubility_defaults.json"
+}
+
+
 }

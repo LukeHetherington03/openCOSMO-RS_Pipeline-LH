@@ -131,6 +131,7 @@ class Job:
         self.job_dir = job_dir
         self.stage = stage
         self.parameters = parameters or {}
+        self.config = request.parameters.get("config", {})
 
         self.job_state_path = os.path.join(job_dir, "job_state.json")
         self.stage_log_path = os.path.join(job_dir, "stage.log")
@@ -322,3 +323,11 @@ class Job:
         if self.stage in self.STAGE_OUTPUTS:
             return os.path.join(self.outputs_dir, self.STAGE_OUTPUTS[self.stage])
         return None
+    
+    def get_request_id(self):
+        """Return the parent request's ID."""
+        return self.request.request_id
+
+    def get_job_id(self):
+        """Return the job ID."""
+        return self.job_id

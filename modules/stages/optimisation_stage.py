@@ -42,12 +42,9 @@ PARSER_BACKENDS = {
 
 
 class OptimisationRecord:
-    """
-    Canonical in-memory representation of a single optimised conformer.
-    """
-
-    def __init__(self, lookup_id, energy, xyz_path, log_path, method, status, metadata=None):
+    def __init__(self, lookup_id, inchi_key, energy, xyz_path, log_path, method, status, metadata=None):
         self.lookup_id = lookup_id
+        self.inchikey = inchi_key
         self.energy = energy
         self.xyz_path = xyz_path
         self.log_path = log_path
@@ -55,9 +52,11 @@ class OptimisationRecord:
         self.status = status
         self.metadata = metadata or {}
 
+
     def to_energy_entry(self):
         return {
             "lookup_id": self.lookup_id,
+            "inchi_key": self.inchikey,   
             "energy": self.energy,
             "xyz_path": self.xyz_path,
             "log_path": self.log_path,
@@ -67,6 +66,7 @@ class OptimisationRecord:
                 **self.metadata,
             },
         }
+
 
 
 class OptimisationStage(BaseStage):
@@ -231,10 +231,12 @@ class OptimisationStage(BaseStage):
     def _group_by_molecule(self, entries):
         groups = {}
         for e in entries:
-            lookup = e.get("lookup_id", "")
-            mol_id = lookup.split("_conf")[0] if "_conf" in lookup else lookup
+            mol_id = e.get("inchi_key")  
+            if mol_id is None:
+                continue
             groups.setdefault(mol_id, []).append(e)
         return groups
+
 
     # -------------------------------------------------------------------------
     # Optimise all conformers (conformer-level items)
@@ -306,6 +308,7 @@ class OptimisationStage(BaseStage):
     def _optimise_single(self, entry, engine, max_iter):
         lookup_id = entry["lookup_id"]
         xyz_path = entry["xyz_path"]
+        inchi_key=entry["inchi_key"]
 
         start = time.perf_counter()
         backend_result = self._run_engine(xyz_path, engine, max_iter)
@@ -362,6 +365,7 @@ class OptimisationStage(BaseStage):
         # Normalised record
         record = OptimisationRecord(
             lookup_id=lookup_id,
+            inchi_key=inchi_key,
             energy=energy,
             xyz_path=xyz_out,
             log_path=log_out,
@@ -709,17 +713,14 @@ class OptimisationStage(BaseStage):
 
         self.log(f"Optimisation outputs written to: {outputs_dir}")
 
-    # -------------------------------------------------------------------------
-    # Human-readable molecule summary
-    # -------------------------------------------------------------------------
     def _write_human_summary_csv(self, records, molecules, engine, outputs_dir):
         summary_csv = os.path.join(outputs_dir, "optimisation_summary.csv")
         mol_stats = []
 
-        # Pre-index records by mol_id
+        # Pre-index records by molecule ID (inchi_key)
         by_mol = {}
         for r in records:
-            mol_id = r.lookup_id.split("_conf")[0] if "_conf" in r.lookup_id else r.lookup_id
+            mol_id = r.inchikey   # ← authoritative
             by_mol.setdefault(mol_id, []).append(r)
 
         for mol_id, mol_entries in molecules.items():

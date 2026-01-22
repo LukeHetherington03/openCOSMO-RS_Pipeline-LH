@@ -1,0 +1,10 @@
+{
+  "lookup_id": "BAPJBEWLBFYGME-UHFFFAOYSA-N",
+  "inchi_key": "BAPJBEWLBFYGME-UHFFFAOYSA-N",
+  "inchi": "InChI=1S/C4H6O2/c1-3-4(5)6-2/h3H,1H2,2H3",
+  "smiles": "C=CC(=O)OC",
+  "melting_temp": 194.73,
+  "Hfus": 12.01,
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Tm and ΔfusH° estimated via Joback method."
+}
