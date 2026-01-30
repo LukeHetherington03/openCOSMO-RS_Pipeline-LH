@@ -1,0 +1,11 @@
+{
+  "lookup_id": "DDUHZTYCFQRHIY-RBHXEPJQSA-N",
+  "inchi_key": "DDUHZTYCFQRHIY-RBHXEPJQSA-N",
+  "inchi": "InChI=1S/C17H17ClO6/c1-8-5-9(19)6-12(23-4)17(8)16(20)13-10(21-2)7-11(22-3)14(18)15(13)24-17/h6-8H,5H2,1-4H3/t8-,17+/m1/s1",
+  "smiles": "COC1=CC(=O)C[C@@H](C)[C@]12Oc1c(Cl)c(OC)cc(OC)c1C2=O",
+  "melting_temp": 492.15,
+  "melting_temp_source": "219 \u00b0C (Wikipedia)",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

@@ -1,0 +1,11 @@
+{
+  "lookup_id": "CNQOLVBNICGIJB-QGZVFWFLSA-N",
+  "inchi_key": "CNQOLVBNICGIJB-QGZVFWFLSA-N",
+  "inchi": "InChI=1S/C24H22ClFN2O3/c1-3-6-15-11-16-12-27-9-10-28(20(30)4-2)13-17(27)14-31-24(16)23(26)21(15)22-18(25)7-5-8-19(22)29/h4-5,7-8,11,17,29H,2,9-10,12-14H2,1H3/t17-/m1/s1",
+  "smiles": "C=CC(=O)N1CCN2Cc3cc(C#CC)c(-c4c(O)cccc4Cl)c(F)c3OC[C@H]2C1",
+  "melting_temp": null,
+  "melting_temp_source": "\"No melting point reported (Chemsrc) \"",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

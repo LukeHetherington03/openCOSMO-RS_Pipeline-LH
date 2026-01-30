@@ -1,0 +1,11 @@
+{
+  "lookup_id": "HYYBABOKPJLUIN-UHFFFAOYSA-N",
+  "inchi_key": "HYYBABOKPJLUIN-UHFFFAOYSA-N",
+  "inchi": "InChI=1S/C15H15NO2/c1-10-6-5-9-13(11(10)2)16-14-8-4-3-7-12(14)15(17)18/h3-9,16H,1-2H3,(H,17,18)",
+  "smiles": "Cc1cccc(Nc2ccccc2C(=O)O)c1C",
+  "melting_temp": 503.15,
+  "melting_temp_source": "230 \u00b0C (ChemicalBook)",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}
