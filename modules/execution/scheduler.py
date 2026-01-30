@@ -64,7 +64,7 @@ class Scheduler:
         for p in psutil.process_iter(['cmdline']):
             try:
                 cmd = p.info['cmdline']
-                if cmd and "modules.pipeline_runner" in " ".join(cmd):
+                if cmd and "modules.execution.pipeline_runner" in " ".join(cmd):
                     count += 1
             except psutil.NoSuchProcess:
                 pass

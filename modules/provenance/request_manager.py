@@ -186,11 +186,6 @@ class Request:
             self.stage_args = stage_args or []
             self.parameters = parameters or {}
 
-            # Resource + detached handling
-            from modules.execution.resource_manager import ResourceManager
-            self.resources = ResourceManager.get_resources(self.parameters)
-            self.detached = self.parameters.get("detached", False)
-
             self.parent_request = parent_request
             self.continued_from_request = continued_from_request
             self.continued_from_job = continued_from_job
@@ -262,10 +257,7 @@ class Request:
 
         self.jobs = data.get("jobs", [])
 
-        # Recompute resources + detached
-        from modules.execution.resource_manager import ResourceManager
-        self.resources = ResourceManager.get_resources(self.parameters)
-        self.detached = self.parameters.get("detached", False)
+
 
     # ------------------------------------------------------------
     # Job registration

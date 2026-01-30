@@ -17,7 +17,7 @@ def main():
 
     base_dir = os.path.abspath("pipeline_data")
 
-    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv"
+    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/NTU_AZ_medicinesol.csv"
 
     # Declarative pipeline specification
     pipeline_spec = [
@@ -44,7 +44,7 @@ def main():
             "stage": "pruning",
             "args": {
                 "strategy": "top_n",
-                "strategy_params": {"n": 20},
+                "strategy_params": {"n": 10},
             },
         },
 
@@ -52,6 +52,22 @@ def main():
             "stage": "optimisation",
             "args": {
                 "engine": "gxtb",
+                "max_iter": 250,
+            },
+        },
+
+        {
+            "stage": "pruning",
+            "args": {
+                "strategy": "top_n",
+                "strategy_params": {"n": 3},
+            },
+        },
+
+        {
+            "stage": "optimisation",
+            "args": {
+                "engine": "dft_final",
                 "max_iter": 250,
             },
         },
@@ -65,9 +81,6 @@ def main():
             },
         },
 
-        # --------------------------------------------------------
-        # 7. Solubility Stage (NEW)
-        # --------------------------------------------------------
         {
             "stage": "solubility",
             "args": {
@@ -84,8 +97,7 @@ def main():
 
     # Global request parameters
     parameters = {
-        "title": "gxtb_t20",
-        "detached": False,
+        "title": "NTU_PHARMA",
         "resources": {
             "cpus": 20,
             "memory_gb": 64,
@@ -96,7 +108,7 @@ def main():
     # Create the Request
     req = Request.create_new(
         base_dir=base_dir,
-        dataset="gxtb_t20",
+        dataset="NTU_PHARMA",
         pipeline_spec=pipeline_spec,
         parameters=parameters,
     )

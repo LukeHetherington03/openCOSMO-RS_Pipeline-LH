@@ -38,14 +38,10 @@ class GenerationStage(BaseStage):
     def execute(self):
         self.log_header("Starting Generation Stage")
 
-        # --------------------------------------------------------
-        # Load config from request → job → stage
-        # --------------------------------------------------------
         cfg = self.config
         if not cfg:
             self.fail("GenerationStage: missing config in job.config")
 
-        # Global metadata directory
         self.GLOBAL_METADATA_DIR = cfg["constant_files"]["metadata_dir"]
         os.makedirs(self.GLOBAL_METADATA_DIR, exist_ok=True)
 
@@ -68,19 +64,14 @@ class GenerationStage(BaseStage):
         self.log(f"Input summary file: {summary_file}")
         self.log(f"Conformers per molecule: {num_confs}")
 
-        # Prepare directories
         dirs = self._prepare_directories()
 
-        # Load cleaned dataset
         df_all = self._load_and_merge_csvs(input_csvs)
 
-        # Validate molecules
         valid_rows = self._validate_and_canonicalise(df_all)
 
-        # Initialise job items
         self.set_items([idx for idx, *_ in valid_rows])
 
-        # Dispatch backend
         results = self._dispatch_backend(
             backend=backend,
             valid_rows=valid_rows,
@@ -89,7 +80,6 @@ class GenerationStage(BaseStage):
             xyz_out_dir=dirs["xyz"]
         )
 
-        # Write outputs + metadata templates
         self._write_outputs(
             results=results,
             input_csvs=input_csvs,
@@ -110,7 +100,7 @@ class GenerationStage(BaseStage):
             "outputs": self.outputs_dir,
             "xyz": os.path.join(self.outputs_dir, "xyz"),
             "raw": os.path.join(self.outputs_dir, "raw"),
-            "metadata": os.path.join(self.outputs_dir, "molecule_metadata"),  # job-local
+            "metadata": os.path.join(self.outputs_dir, "molecule_metadata"),
         }
         for d in dirs.values():
             os.makedirs(d, exist_ok=True)
@@ -153,12 +143,32 @@ class GenerationStage(BaseStage):
 
             smiles = Chem.MolToSmiles(mol, canonical=True)
 
-            # Return row so we can propagate melting_temp etc.
+            # ----------------------------------------------------
+            # NEW: Normalise melting_temp and melting_temp_source
+            # ----------------------------------------------------
+            melting_temp = row.get("melting_temp")
+            if pd.notna(melting_temp):
+                try:
+                    melting_temp = float(str(melting_temp).strip())
+                except Exception:
+                    melting_temp = None
+            else:
+                melting_temp = None
+
+            melting_temp_source = row.get("melting_temp_source")
+            if isinstance(melting_temp_source, str):
+                melting_temp_source = melting_temp_source.strip()
+                if melting_temp_source == "":
+                    melting_temp_source = None
+
+            # Store back into row so backend sees correct values
+            row["melting_temp"] = melting_temp
+            row["melting_temp_source"] = melting_temp_source
+
             valid.append((idx, smiles, row))
 
         self.log(f"Valid molecules: {len(valid)}")
         return valid
-
 
     # ------------------------------------------------------------
     # Backend dispatch
@@ -194,11 +204,9 @@ class GenerationStage(BaseStage):
                 self.update_progress(idx, success=False)
                 continue
 
-            # Compute InChI + InChIKey once per molecule
             inchi = Chem.inchi.MolToInchi(mol)
             inchi_key = Chem.inchi.InchiToInchiKey(inchi)
 
-            # Extract melting point lineage from cleaned CSV
             melting_temp = row.get("melting_temp")
             melting_temp_source = row.get("melting_temp_source")
 
@@ -233,7 +241,6 @@ class GenerationStage(BaseStage):
 
         return results
 
-
     # ------------------------------------------------------------
     # Helpers: Output writing
     # ------------------------------------------------------------
@@ -242,20 +249,16 @@ class GenerationStage(BaseStage):
         if not results:
             self.fail("Generation produced zero conformers.")
 
-        # summary.csv
         summary_path = os.path.join(dirs["outputs"], "summary.csv")
         with AtomicWriter(summary_path) as f:
             pd.DataFrame(results).to_csv(f, index=False)
 
-        # energies.json
         energies_path = os.path.join(dirs["outputs"], "energies.json")
         with AtomicWriter(energies_path) as f:
             json.dump(results, f, indent=2)
 
-        # Write molecule-level metadata templates
         self._write_metadata_templates(results, dirs["metadata"])
 
-        # job_state.json
         job_state_path = os.path.join(self.job.job_dir, "job_state.json")
         with AtomicWriter(job_state_path) as f:
             json.dump(
@@ -271,11 +274,10 @@ class GenerationStage(BaseStage):
             )
 
     # ------------------------------------------------------------
-    # Write molecule metadata templates (job-local + global)
+    # Write molecule metadata templates
     # ------------------------------------------------------------
     def _write_metadata_templates(self, results, job_metadata_dir):
 
-        # Group by InChIKey (one template per molecule)
         molecules = {}
         for entry in results:
             key = entry["inchi_key"]
@@ -291,23 +293,19 @@ class GenerationStage(BaseStage):
                 "inchi": entry["inchi"],
                 "smiles": md["smiles"],
 
-                # Propagated from CleaningStage
-                "melting_temp": md.get("melting_temp", "N/A"),
-                "melting_temp_source": md.get("melting_temp_source", "N/A"),
+                "melting_temp": md.get("melting_temp", None),
+                "melting_temp_source": md.get("melting_temp_source", None),
 
-                # Still user-editable
                 "Hfus": "N/A",
                 "Gfus_model": "MyrdalYalkowsky",
 
                 "notes": "Fill in melting point, Hfus, and Gfus model if known."
             }
 
-            # 1. Write job-local metadata file
             job_path = os.path.join(job_metadata_dir, f"{inchi_key}.json")
             with AtomicWriter(job_path) as f:
                 json.dump(template, f, indent=2)
 
-            # 2. Write global metadata file ONLY IF NOT EXISTS
             global_path = os.path.join(self.GLOBAL_METADATA_DIR, f"{inchi_key}.json")
 
             if not os.path.exists(global_path):
