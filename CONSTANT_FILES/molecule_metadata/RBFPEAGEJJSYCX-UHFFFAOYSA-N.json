@@ -1,0 +1,10 @@
+{
+  "lookup_id": "RBFPEAGEJJSYCX-UHFFFAOYSA-N",
+  "inchi_key": "RBFPEAGEJJSYCX-UHFFFAOYSA-N",
+  "inchi": "InChI=1S/C12H22O5/c1-4-14-5-6-15-7-8-16-9-10-17-12(13)11(2)3/h2,4-10H2,1,3H3",
+  "smiles": "C=C(C)C(=O)OCCOCCOCCOCC",
+  "melting_temp": "N/A",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

@@ -1,0 +1,10 @@
+{
+  "lookup_id": "VFHVQBAGLAREND-UHFFFAOYSA-N",
+  "inchi_key": "VFHVQBAGLAREND-UHFFFAOYSA-N",
+  "inchi": "InChI=1S/C22H21O2P/c1-16-14-17(2)21(18(3)15-16)22(23)25(24,19-10-6-4-7-11-19)20-12-8-5-9-13-20/h4-15H,1-3H3",
+  "smiles": "Cc1cc(C)c(C(=O)P(=O)(c2ccccc2)c2ccccc2)c(C)c1",
+  "melting_temp": "N/A",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

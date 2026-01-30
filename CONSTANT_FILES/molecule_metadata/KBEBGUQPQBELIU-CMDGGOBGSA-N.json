@@ -1,0 +1,10 @@
+{
+  "lookup_id": "KBEBGUQPQBELIU-CMDGGOBGSA-N",
+  "inchi_key": "KBEBGUQPQBELIU-CMDGGOBGSA-N",
+  "inchi": "InChI=1S/C11H12O2/c1-2-13-11(12)9-8-10-6-4-3-5-7-10/h3-9H,2H2,1H3/b9-8+",
+  "smiles": "CCOC(=O)/C=C/c1ccccc1",
+  "melting_temp": "N/A",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

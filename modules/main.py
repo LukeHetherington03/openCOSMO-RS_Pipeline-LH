@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 ### cd openCOSMO-RS_Pipeline-LH/
@@ -17,7 +17,7 @@ def main():
 
     base_dir = os.path.abspath("pipeline_data")
 
-    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv"
+    input_csv = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv"
 
     # Declarative pipeline specification
     pipeline_spec = [
@@ -34,7 +34,7 @@ def main():
         {
             "stage": "generation",
             "args": {
-                "num_confs": 100,
+                "num_confs": 200,
                 "seed": 42,
                 "engine": "rdkit",
             },
@@ -44,7 +44,7 @@ def main():
             "stage": "pruning",
             "args": {
                 "strategy": "top_n",
-                "strategy_params": {"n": 10},
+                "strategy_params": {"n": 20},
             },
         },
 
@@ -52,22 +52,6 @@ def main():
             "stage": "optimisation",
             "args": {
                 "engine": "gxtb",
-                "max_iter": 250,
-            },
-        },
-
-        {
-            "stage": "pruning",
-            "args": {
-                "strategy": "top_n",
-                "strategy_params": {"n": 3},
-            },
-        },
-
-        {
-            "stage": "optimisation",
-            "args": {
-                "engine": "orca_final",
                 "max_iter": 250,
             },
         },
@@ -100,7 +84,7 @@ def main():
 
     # Global request parameters
     parameters = {
-        "title": "acr_t1_test",
+        "title": "gxtb_t20",
         "detached": False,
         "resources": {
             "cpus": 20,
@@ -112,7 +96,7 @@ def main():
     # Create the Request
     req = Request.create_new(
         base_dir=base_dir,
-        dataset="acr_t5",
+        dataset="gxtb_t20",
         pipeline_spec=pipeline_spec,
         parameters=parameters,
     )

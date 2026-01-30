@@ -1,0 +1,10 @@
+{
+  "lookup_id": "PFPUZMSQZJFLBK-UHFFFAOYSA-N",
+  "inchi_key": "PFPUZMSQZJFLBK-UHFFFAOYSA-N",
+  "inchi": "InChI=1S/C9H14N2O3/c1-7(2)8(12)14-6-5-11-4-3-10-9(11)13/h1,3-6H2,2H3,(H,10,13)",
+  "smiles": "C=C(C)C(=O)OCCN1CCNC1=O",
+  "melting_temp": "N/A",
+  "Hfus": "N/A",
+  "Gfus_model": "MyrdalYalkowsky",
+  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+}

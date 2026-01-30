@@ -78,7 +78,7 @@ class GenerationStage(BaseStage):
         valid_rows = self._validate_and_canonicalise(df_all)
 
         # Initialise job items
-        self.set_items([idx for idx, _ in valid_rows])
+        self.set_items([idx for idx, *_ in valid_rows])
 
         # Dispatch backend
         results = self._dispatch_backend(
@@ -152,10 +152,13 @@ class GenerationStage(BaseStage):
                 continue
 
             smiles = Chem.MolToSmiles(mol, canonical=True)
-            valid.append((idx, smiles))
+
+            # Return row so we can propagate melting_temp etc.
+            valid.append((idx, smiles, row))
 
         self.log(f"Valid molecules: {len(valid)}")
         return valid
+
 
     # ------------------------------------------------------------
     # Backend dispatch
@@ -177,7 +180,7 @@ class GenerationStage(BaseStage):
     def _backend_rdkit(self, valid_rows, num_confs, seed, xyz_out_dir):
         results = []
 
-        for idx, smiles in valid_rows:
+        for idx, smiles, row in valid_rows:
             self.log_section(f"Generating for SMILES: {smiles}")
 
             mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
@@ -195,6 +198,10 @@ class GenerationStage(BaseStage):
             inchi = Chem.inchi.MolToInchi(mol)
             inchi_key = Chem.inchi.InchiToInchiKey(inchi)
 
+            # Extract melting point lineage from cleaned CSV
+            melting_temp = row.get("melting_temp")
+            melting_temp_source = row.get("melting_temp_source")
+
             for conf_id in conf_ids:
                 try:
                     AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
@@ -203,7 +210,6 @@ class GenerationStage(BaseStage):
                     self.log(f"[WARNING] UFF optimisation failed: {e}")
                     continue
 
-                # lookup_id now uses full InChIKey
                 lookup_id = f"{inchi_key}_conf{conf_id:03d}"
 
                 xyz_path = os.path.join(xyz_out_dir, f"{lookup_id}.xyz")
@@ -218,12 +224,15 @@ class GenerationStage(BaseStage):
                     "metadata": {
                         "smiles": smiles,
                         "source_row": int(idx),
+                        "melting_temp": melting_temp,
+                        "melting_temp_source": melting_temp_source,
                     }
                 })
 
             self.update_progress(idx)
 
         return results
+
 
     # ------------------------------------------------------------
     # Helpers: Output writing
@@ -274,14 +283,19 @@ class GenerationStage(BaseStage):
 
         for inchi_key, entry in molecules.items():
 
+            md = entry["metadata"]
+
             template = {
                 "lookup_id": inchi_key,
                 "inchi_key": inchi_key,
                 "inchi": entry["inchi"],
-                "smiles": entry["metadata"]["smiles"],
+                "smiles": md["smiles"],
 
-                # User-editable fields for solubility stage
-                "melting_temp": "N/A",
+                # Propagated from CleaningStage
+                "melting_temp": md.get("melting_temp", "N/A"),
+                "melting_temp_source": md.get("melting_temp_source", "N/A"),
+
+                # Still user-editable
                 "Hfus": "N/A",
                 "Gfus_model": "MyrdalYalkowsky",
 
