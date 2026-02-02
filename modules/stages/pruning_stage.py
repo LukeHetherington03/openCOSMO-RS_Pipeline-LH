@@ -1,28 +1,32 @@
 import os
-import json
 import pandas as pd
 import numpy as np
 
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
+from modules.utils.conformers import ConformerRecord, ConformerSet
 
 
 class PruningStage(BaseStage):
     """
-    Prunes conformers for each molecule group.
+    Prunes conformers for each molecule.
 
     Features:
-      - Molecule-level job items (clean logs)
-      - Conformer-level pruning logic
-      - Configurable pruning strategies:
-            * keep_lowest_n
+      - Uses ConformerSet / ConformerRecord
+      - Reads and writes energies.json (canonical conformer store)
+      - Groups by inchi_key (molecule-level)
+      - Deterministic pruning pipeline driven by args:
+            * rmsd_threshold
             * energy_window
-            * all (no pruning)
-            * rmsd (placeholder)
-      - Removes conformers with missing energies (logged)
+            * max_energy
+            * percentile
+            * n        (keep lowest N)
+            * n_high   (keep highest N)
+            * n_start  (slice start, supports negative)
+      - Always removes conformers with missing energies
       - Produces:
             * pruned energies.json
-            * pruning_summary.csv (human readable)
+            * pruning_summary.csv
     """
 
     # ------------------------------------------------------------
@@ -31,208 +35,357 @@ class PruningStage(BaseStage):
     def execute(self):
         self.log_header("Starting Pruning Stage")
 
-        params = self.parameters
+        cfg = self.config or {}
+        self.strict_mode = bool(cfg.get("pruning", {}).get("strict", False))
 
-        # ------------------------------------------------------------
-        # 🔧 Patch: Map pipeline-style args → pruning-stage args
-        # ------------------------------------------------------------
-        if "strategy" in params:
-            params["pruning_strategy"] = params["strategy"]
+        params = self.parameters or {}
 
-        if "strategy_params" in params and isinstance(params["strategy_params"], dict):
-            for k, v in params["strategy_params"].items():
-                params[k] = v
+        energies_file = params.get("energies_file")
+        if energies_file is None:
+            energies_file = self._auto_detect_energies()
 
-        # Alias: top_n → keep_lowest_n
-        if params.get("pruning_strategy") == "top_n":
-            params["pruning_strategy"] = "keep_lowest_n"
+        if not os.path.isfile(energies_file):
+            self.fail(f"PruningStage: energies_file does not exist: {energies_file}")
 
-        self.log(f"[DEBUG] Using pruning strategy: {params.get('pruning_strategy')}")
-        self.log(f"[DEBUG] Strategy parameters: { {k: params[k] for k in params if k not in ('summary_file')} }")
+        self.log(f"Energies file: {energies_file}")
+        self.log(f"Strict mode: {self.strict_mode}")
 
-        summary_file = params.get("summary_file")
-        if summary_file is None:
-            self.fail("PruningStage requires summary_file from previous stage.")
+        conformer_set = ConformerSet.load(energies_file)
+        groups = conformer_set.group_by_molecule()
 
-        if not os.path.isfile(summary_file):
-            self.fail(f"summary_file does not exist: {summary_file}")
-
-        # Load entries
-        entries = self._load_entries(summary_file)
-
-        # Group by molecule
-        groups = self._group_by_molecule(entries)
-
-        # Job items = molecule IDs
         molecule_ids = list(groups.keys())
         self.set_items(molecule_ids)
 
-        # Prune each molecule group
-        pruned_entries = []
+        self.warnings = {
+            "molecules_all_missing_energy": 0,
+        }
+
+        pruned_records = []
         summary_rows = []
 
-        for mol_id, conformers in groups.items():
+        for inchi_key, confs in groups.items():
             try:
-                survivors, summary_row = self._prune_group(mol_id, conformers, params)
-                pruned_entries.extend(survivors)
+                survivors, summary_row = self._prune_group(inchi_key, confs, params)
+                for rec in survivors:
+                    pruned_records.append(rec)
                 summary_rows.append(summary_row)
 
-                self.update_progress(mol_id, success=True)
-                self.log(f"[INFO] Pruning complete for {mol_id}: kept {len(survivors)} conformers")
+                self.update_progress(inchi_key, success=True)
+                self.log(
+                    f"[INFO] Pruning complete for {inchi_key}: "
+                    f"kept {len(survivors)} conformers"
+                )
 
             except Exception as e:
-                self.log(f"[ERROR] Pruning failed for {mol_id}: {e}")
-                self.update_progress(mol_id, success=False)
+                self.log(f"[ERROR] Pruning failed for {inchi_key}: {e}")
+                self.update_progress(inchi_key, success=False)
+                if self.strict_mode:
+                    self.fail(f"Pruning failed for {inchi_key}: {e}")
 
-        # Write outputs
-        self._write_outputs(pruned_entries, summary_rows)
+        pruned_set = ConformerSet(records=pruned_records)
+        self._write_outputs(pruned_set, summary_rows)
 
+        self._log_warning_summary()
         self.log_header("Pruning Stage Complete")
         self.job.mark_complete()
 
     # ------------------------------------------------------------
-    # Load entries
+    # Input handling
     # ------------------------------------------------------------
-    def _load_entries(self, summary_file):
-        try:
-            with open(summary_file) as f:
-                entries = json.load(f)
-        except Exception as e:
-            self.fail(f"Failed to load summary_file: {e}")
-
-        if not isinstance(entries, list):
-            self.fail("summary_file must contain a list of conformer entries.")
-
-        return entries
-
-    # ------------------------------------------------------------
-    # Group conformers by molecule
-    # ------------------------------------------------------------
-    def _group_by_molecule(self, entries):
-        groups = {}
-        for e in entries:
-            lookup = e.get("lookup_id")
-            if not lookup:
-                self.log("[WARNING] Entry missing lookup_id, skipping")
-                continue
-
-            # Extract molecule ID (everything before _confXXX)
-            if "_conf" in lookup:
-                mol_id = lookup.split("_conf")[0]
-            else:
-                mol_id = lookup  # fallback
-
-            groups.setdefault(mol_id, []).append(e)
-
-        self.log(f"Found {len(groups)} molecule groups")
-        return groups
+    def _auto_detect_energies(self) -> str:
+        candidates = [
+            os.path.join(self.inputs_dir, "energies.json"),
+            os.path.join(self.outputs_dir, "energies.json"),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                self.log(f"Auto-detected energies.json at: {path}")
+                return path
+        self.fail(
+            "PruningStage: energies_file not provided and energies.json "
+            "could not be auto-detected."
+        )
 
     # ------------------------------------------------------------
     # Pruning logic for a single molecule
     # ------------------------------------------------------------
-    def _prune_group(self, mol_id, conformers, params):
+    def _prune_group(self, inchi_key, conformers, params):
         """
         Returns:
-            survivors: list of conformer dicts
+            survivors: list[ConformerRecord]
             summary_row: dict for pruning_summary.csv
         """
 
-        # Remove conformers with missing energies
+        total_confs = len(conformers)
+
+        # 1) Remove conformers with missing or NaN energies
         valid = []
         removed_missing_energy = 0
 
-        for e in conformers:
-            if e.get("energy") is None or (isinstance(e["energy"], float) and np.isnan(e["energy"])):
+        for rec in conformers:
+            e = rec.energy
+            if e is None or (isinstance(e, float) and np.isnan(e)):
                 removed_missing_energy += 1
-                self.log(f"[WARNING] {mol_id}: conformer {e.get('lookup_id')} removed (missing energy)")
+                self.log(
+                    f"[WARNING] {inchi_key}: conformer {rec.lookup_id} "
+                    "removed (missing energy)"
+                )
             else:
-                valid.append(e)
+                valid.append(rec)
 
         if not valid:
-            raise RuntimeError(f"All conformers for {mol_id} missing energies.")
+            msg = f"All conformers for {inchi_key} missing energies."
+            self.log(f"[ERROR] {msg}")
+            self.warnings["molecules_all_missing_energy"] += 1
+            if self.strict_mode:
+                raise RuntimeError(msg)
+            # Non-strict: keep original list (no pruning possible)
+            valid = []
 
-        # Choose pruning strategy
-        strategy = params.get("pruning_strategy", "keep_lowest_n").lower()
+        survivors = list(valid)
 
-        if strategy == "keep_lowest_n":
-            survivors = self._prune_keep_lowest_n(valid, params)
+        # If nothing valid, build summary and return early
+        if not survivors:
+            summary_row = {
+                "inchi_key": inchi_key,
+                "total_conformers": total_confs,
+                "valid_energy_conformers": 0,
+                "removed_missing_energy": removed_missing_energy,
+                "kept_after_pruning": 0,
+                "rmsd_threshold": params.get("rmsd_threshold"),
+                "energy_window": params.get("energy_window"),
+                "max_energy": params.get("max_energy"),
+                "percentile": params.get("percentile"),
+                "n": params.get("n"),
+                "n_high": params.get("n_high"),
+                "n_start": params.get("n_start"),
+            }
+            return [], summary_row
 
-        elif strategy == "energy_window":
-            survivors = self._prune_energy_window(valid, params)
+        # Deterministic pruning pipeline
+        rmsd_threshold = self._get_float(params, "rmsd_threshold")
+        energy_window = self._get_float(params, "energy_window")
+        max_energy = self._get_float(params, "max_energy")
+        percentile = self._get_float(params, "percentile")
+        n = self._get_int(params, "n")
+        n_high = self._get_int(params, "n_high")
+        n_start = self._get_int(params, "n_start")
 
-        elif strategy == "all":
-            survivors = valid
+        # 2) RMSD clustering (placeholder: currently no-op)
+        if rmsd_threshold is not None:
+            survivors = self._prune_rmsd(survivors, rmsd_threshold)
 
-        elif strategy == "rmsd":
-            survivors = self._prune_rmsd(valid, params)  # placeholder
+        # 3) Energy window
+        if energy_window is not None:
+            survivors = self._prune_energy_window(survivors, energy_window)
 
-        else:
-            raise RuntimeError(f"Unknown pruning_strategy: {strategy}")
+        # 4) Max energy cutoff
+        if max_energy is not None:
+            survivors = self._prune_max_energy(survivors, max_energy)
 
-        # Build summary row
+        # 5) Percentile filter
+        if percentile is not None:
+            survivors = self._prune_percentile(survivors, percentile)
+
+        # 6) Keep lowest N
+        if n is not None:
+            survivors = self._prune_keep_lowest_n(survivors, n)
+
+        # 7) Keep highest N
+        if n_high is not None:
+            survivors = self._prune_keep_highest_n(survivors, n_high)
+
+        # 8) Slice (index-based)
+        if n_start is not None and n is not None:
+            survivors = self._prune_slice(survivors, n_start, n)
+
         summary_row = {
-            "molecule_id": mol_id,
-            "total_conformers": len(conformers),
+            "inchi_key": inchi_key,
+            "total_conformers": total_confs,
             "valid_energy_conformers": len(valid),
             "removed_missing_energy": removed_missing_energy,
             "kept_after_pruning": len(survivors),
-            "strategy": strategy,
+            "rmsd_threshold": rmsd_threshold,
+            "energy_window": energy_window,
+            "max_energy": max_energy,
+            "percentile": percentile,
+            "n": n,
+            "n_high": n_high,
+            "n_start": n_start,
         }
 
         return survivors, summary_row
 
     # ------------------------------------------------------------
-    # Strategy: keep lowest N energies
+    # Strategy helpers: parsing
     # ------------------------------------------------------------
-    def _prune_keep_lowest_n(self, conformers, params):
-        n = params.get("n", 5)
-        sorted_conf = sorted(conformers, key=lambda e: e["energy"])
-        return sorted_conf[:n]
+    def _get_float(self, params, key):
+        if key not in params:
+            return None
+        try:
+            return float(params[key])
+        except Exception:
+            self.log(f"[WARNING] Invalid float for {key}: {params[key]} (ignored)")
+            return None
 
-    # ------------------------------------------------------------
-    # Strategy: keep all within ΔE of minimum
-    # ------------------------------------------------------------
-    def _prune_energy_window(self, conformers, params):
-        window = params.get("pruning_energy_window", 5.0)  # kcal/mol
-        sorted_conf = sorted(conformers, key=lambda e: e["energy"])
-        min_e = sorted_conf[0]["energy"]
-        return [e for e in sorted_conf if (e["energy"] - min_e) <= window]
+    def _get_int(self, params, key):
+        if key not in params:
+            return None
+        try:
+            return int(params[key])
+        except Exception:
+            self.log(f"[WARNING] Invalid int for {key}: {params[key]} (ignored)")
+            return None
 
     # ------------------------------------------------------------
     # Strategy: RMSD clustering (placeholder)
     # ------------------------------------------------------------
-    def _prune_rmsd(self, conformers, params):
-        self.log("[WARNING] RMSD pruning not implemented; keeping all conformers")
+    def _prune_rmsd(self, conformers, rmsd_threshold):
+        self.log(
+            f"[WARNING] RMSD pruning (rmsd_threshold={rmsd_threshold}) "
+            "not implemented; keeping all conformers"
+        )
         return conformers
 
     # ------------------------------------------------------------
-    # Write outputs
+    # Strategy: keep all within ΔE of minimum
     # ------------------------------------------------------------
-    def _write_outputs(self, pruned_entries, summary_rows):
+    def _prune_energy_window(self, conformers, energy_window):
+        if not conformers:
+            return conformers
+        energies = np.array([c.energy for c in conformers], dtype=float)
+        min_e = float(energies.min())
+        survivors = [
+            c for c in conformers
+            if (c.energy - min_e) <= energy_window
+        ]
+        self.log(
+            f"[INFO] Energy window pruning (ΔE <= {energy_window}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Strategy: max energy cutoff
+    # ------------------------------------------------------------
+    def _prune_max_energy(self, conformers, max_energy):
+        survivors = [c for c in conformers if c.energy <= max_energy]
+        self.log(
+            f"[INFO] Max energy pruning (E <= {max_energy}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Strategy: percentile filter
+    # ------------------------------------------------------------
+    def _prune_percentile(self, conformers, percentile):
+        if not conformers:
+            return conformers
+        energies = np.array([c.energy for c in conformers], dtype=float)
+        cutoff = float(np.percentile(energies, percentile))
+        survivors = [c for c in conformers if c.energy <= cutoff]
+        self.log(
+            f"[INFO] Percentile pruning (<= {percentile}th, cutoff={cutoff:.4f}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Strategy: keep lowest N energies
+    # ------------------------------------------------------------
+    def _prune_keep_lowest_n(self, conformers, n):
+        if n <= 0 or not conformers:
+            return []
+        sorted_conf = sorted(conformers, key=lambda c: c.energy)
+        survivors = sorted_conf[:n]
+        self.log(
+            f"[INFO] Keep lowest N pruning (N={n}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Strategy: keep highest N energies
+    # ------------------------------------------------------------
+    def _prune_keep_highest_n(self, conformers, n_high):
+        if n_high <= 0 or not conformers:
+            return []
+        sorted_conf = sorted(conformers, key=lambda c: c.energy, reverse=True)
+        survivors = sorted_conf[:n_high]
+        self.log(
+            f"[INFO] Keep highest N pruning (N={n_high}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Strategy: slice by index (supports negative n_start)
+    # ------------------------------------------------------------
+    def _prune_slice(self, conformers, n_start, n):
+        if n <= 0 or not conformers:
+            return []
+        total = len(conformers)
+
+        if n_start < 0:
+            start = total + n_start  # e.g. -1 → last index
+        else:
+            start = n_start
+
+        end = start + n
+        survivors = conformers[max(0, start):max(0, end)]
+        self.log(
+            f"[INFO] Slice pruning (start={n_start}, n={n}): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    # ------------------------------------------------------------
+    # Output writing
+    # ------------------------------------------------------------
+    def _write_outputs(self, pruned_set: ConformerSet, summary_rows):
         outputs_dir = self.outputs_dir
 
-        # energies.json
         energies_path = os.path.join(outputs_dir, "energies.json")
-        with AtomicWriter(energies_path) as f:
-            json.dump(pruned_entries, f, indent=2)
+        pruned_set.save(energies_path)
 
-        # pruning_summary.csv
         summary_path = os.path.join(outputs_dir, "pruning_summary.csv")
         df = pd.DataFrame(summary_rows)
 
-        df = df[
-            [
-                "molecule_id",
-                "total_conformers",
-                "valid_energy_conformers",
-                "removed_missing_energy",
-                "kept_after_pruning",
-                "strategy",
-            ]
+        cols = [
+            "inchi_key",
+            "total_conformers",
+            "valid_energy_conformers",
+            "removed_missing_energy",
+            "kept_after_pruning",
+            "rmsd_threshold",
+            "energy_window",
+            "max_energy",
+            "percentile",
+            "n",
+            "n_high",
+            "n_start",
         ]
+        df = df[cols]
 
         with AtomicWriter(summary_path) as f:
             df.to_csv(f, index=False)
 
         self.log(f"Pruned energies written to: {energies_path}")
         self.log(f"Pruning summary written to: {summary_path}")
+
+    # ------------------------------------------------------------
+    # Warning summary
+    # ------------------------------------------------------------
+    def _log_warning_summary(self):
+        total = sum(self.warnings.values())
+        if total == 0:
+            self.log("Pruning completed with no warnings.")
+            return
+
+        self.log("Pruning completed with warnings:")
+        if self.warnings["molecules_all_missing_energy"] > 0:
+            self.log(
+                " - Molecules with all conformers missing energy: "
+                f"{self.warnings['molecules_all_missing_energy']}"
+            )

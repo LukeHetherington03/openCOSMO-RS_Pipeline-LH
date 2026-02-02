@@ -2,6 +2,9 @@ import os
 import shutil
 import subprocess
 import json
+import time
+
+import pandas as pd
 
 from modules.stages.base_stage import BaseStage
 from modules.parsers.cosmo.orca_log_parser import OrcaLogParser
@@ -10,10 +13,27 @@ from modules.parsers.cosmo.orca_cpcm_corr_parser import OrcaCpcmCorrParser
 
 from modules.orcacosmo_reconstructors.orcacosmo_orchestrator import OrcaCosmoOrchestrator
 from modules.utils.atomic_write import AtomicWriter
-from modules.utils.molecule_utils import MoleculeUtils
 
 
 class OrcacosmoStage(BaseStage):
+    """
+    ORCA COSMO stage.
+
+    Responsibilities:
+      - Load conformer XYZs from an energies.json-like summary_file
+      - For each conformer:
+          - Run ORCA CPCM (TZVPD, with optional TZVP fallback)
+          - Parse LOG, CPCM, CPCM_CORR
+          - Build a bundle for the OrcaCosmoOrchestrator
+          - Write .orcacosmo file
+      - Produce:
+          - raw_outputs/<lookup_id>.{log,cpcm,cpcm_corr}
+          - orca_inputs/<lookup_id>_{tzvpd|tzvp}.inp
+          - orcacosmo_outputs/<lookup_id>.orcacosmo
+          - orcacosmo_results.json (all results in one JSON)
+          - orcacosmo_summary.csv (human-readable summary)
+          - item_to_lookup_mapping.json
+    """
 
     # ------------------------------------------------------------
     # Entry point
@@ -32,6 +52,14 @@ class OrcacosmoStage(BaseStage):
         self.successful_outputs = []
         self.item_index = 0
         self.item_to_lookup = {}
+        self.stats = {
+            "successful": 0,
+            "failed": 0,
+            "fallback_used": 0,
+            "missing_xyz": 0,
+        }
+
+        stage_start = time.perf_counter()
 
         for lookup_id in list(self.job.pending_items):
             xyz_path = os.path.join(self.inputs_dir, f"{lookup_id}.xyz")
@@ -45,10 +73,15 @@ class OrcacosmoStage(BaseStage):
             try:
                 self._process_single(lookup_id, xyz_path, item_num)
                 self.update_progress(lookup_id)
+                self.stats["successful"] += 1
             except Exception as e:
                 self._handle_failure(lookup_id, e)
+                self.stats["failed"] += 1
 
-        self._write_summary()
+        stage_end = time.perf_counter()
+        self._write_summary(stage_start, stage_end)
+        self._log_warning_summary()
+
         self.job.mark_complete()
         self.log_header("ORCA COSMO Stage Complete")
 
@@ -77,6 +110,15 @@ class OrcacosmoStage(BaseStage):
             self.fail("Missing metadata_dir in config['constant_files']")
 
         self.enable_fallback = cfg.get("enable_tzvp_fallback", False)
+        self.strict_mode = bool(cfg.get("cosmo", {}).get("strict", False))
+
+        # ORCA version (best-effort)
+        self.orca_version = "unknown"
+        try:
+            out = subprocess.check_output([self.orca_command, "-h"], stderr=subprocess.STDOUT)
+            self.orca_version = out.decode(errors="ignore").splitlines()[0].strip()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # CPCM radii
@@ -117,7 +159,7 @@ class OrcacosmoStage(BaseStage):
         self.log("[INFO] Output directories prepared")
 
     # ------------------------------------------------------------
-    # XYZ loading
+    # XYZ loading from summary_file (energies-like JSON)
     # ------------------------------------------------------------
     def _load_xyzs_from_summary(self):
         summary_file = self.parameters.get("summary_file")
@@ -135,10 +177,10 @@ class OrcacosmoStage(BaseStage):
         for entry in entries:
             lookup_id = entry.get("lookup_id")
             xyz_src = entry.get("xyz_path")
-            inchi_key = entry.get("inchi_key")
 
             if lookup_id and xyz_src and os.path.exists(xyz_src):
-                shutil.copy(xyz_src, os.path.join(self.inputs_dir, f"{lookup_id}.xyz"))
+                dst = os.path.join(self.inputs_dir, f"{lookup_id}.xyz")
+                shutil.copy(xyz_src, dst)
 
         self.log("[INFO] XYZs loaded from summary_file")
 
@@ -161,6 +203,7 @@ class OrcacosmoStage(BaseStage):
     def _skip_missing_xyz(self, lookup_id):
         self.log(f"[WARNING] Missing XYZ for {lookup_id}, skipping.")
         self.update_progress(lookup_id, success=False)
+        self.stats["missing_xyz"] += 1
 
     def _assign_item_number(self, lookup_id):
         item_num = self.item_index
@@ -172,6 +215,8 @@ class OrcacosmoStage(BaseStage):
     def _handle_failure(self, lookup_id, e):
         self.log(f"[ERROR] {lookup_id}: {e}")
         self.update_progress(lookup_id, success=False)
+        if self.strict_mode:
+            self.fail(f"Strict mode enabled; aborting due to failure on {lookup_id}")
 
     # ------------------------------------------------------------
     # Main processing
@@ -180,9 +225,11 @@ class OrcacosmoStage(BaseStage):
         workdir = self._prepare_workdir(item_num)
         local_xyz = self._copy_xyz_to_workdir(lookup_id, xyz_path, workdir)
 
+        start = time.perf_counter()
         method_used, fallback_triggered = self._run_orca_with_fallback(
             lookup_id, item_num, workdir
         )
+        elapsed = time.perf_counter() - start
 
         self._copy_raw_outputs(lookup_id, item_num, workdir)
 
@@ -190,15 +237,10 @@ class OrcacosmoStage(BaseStage):
         cpcm_json = self._parse_cpcm_json(lookup_id)
         cpcm_corr_json = self._parse_cpcm_corr_json(lookup_id)
 
-        # Write individual parser JSONs (keep this if you still want them)
+        # Keep parser JSONs for orchestrator (internal, not "results")
         self._write_parser_json(lookup_id, "log", log_json)
         self._write_parser_json(lookup_id, "cpcm", cpcm_json)
         self._write_parser_json(lookup_id, "cpcm_corr", cpcm_corr_json)
-        self.log(f"[INFO] Parsed LOG JSON keys: {list(log_json.keys())}")
-        self.log(f"[INFO] Parsed CPCM JSON keys: {list(cpcm_json.keys())}")
-        self.log(f"[INFO] Parsed CPCM_CORR JSON keys: {list(cpcm_corr_json.keys())}")
-
-
 
         bundle = self._build_bundle(lookup_id, method_used, fallback_triggered)
 
@@ -215,10 +257,22 @@ class OrcacosmoStage(BaseStage):
             f.write(orcacosmo_text)
         self.log(f"[WRITE] .orcacosmo written to {orcacosmo_path}")
 
+        if fallback_triggered:
+            self.stats["fallback_used"] += 1
 
-        # Record success
-        self._record_success(lookup_id, bundle)
-
+        # Record success into in-memory results
+        self._record_success(
+            lookup_id=lookup_id,
+            item_num=item_num,
+            method_used=method_used,
+            fallback_triggered=fallback_triggered,
+            elapsed_seconds=elapsed,
+            log_json=log_json,
+            cpcm_json=cpcm_json,
+            cpcm_corr_json=cpcm_corr_json,
+            orcacosmo_path=orcacosmo_path,
+            bundle_path=bundle_path,
+        )
 
     # ------------------------------------------------------------
     # Workdir helpers
@@ -383,7 +437,7 @@ class OrcacosmoStage(BaseStage):
         return OrcaCpcmCorrParser(path).parse()
 
     # ------------------------------------------------------------
-    # Parser JSON writers
+    # Parser JSON writers (for orchestrator)
     # ------------------------------------------------------------
     def _write_parser_json(self, lookup_id, kind, data):
         out = os.path.join(self.parsed_outputs_dir, f"{lookup_id}.{kind}.json")
@@ -411,66 +465,109 @@ class OrcacosmoStage(BaseStage):
                 ),
                 "cpcm_radii_source": self.cpcm_file,
             },
-        "paths": {
-            "log": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.log.json"),
-            "cpcm": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.cpcm.json"),
-            "cpcm_corr": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.cpcm_corr.json"),
-            "xyz": os.path.join(self.inputs_dir, f"{lookup_id}.xyz"),
+            "paths": {
+                "log": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.log.json"),
+                "cpcm": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.cpcm.json"),
+                "cpcm_corr": os.path.join(self.parsed_outputs_dir, f"{lookup_id}.cpcm_corr.json"),
+                "xyz": os.path.join(self.inputs_dir, f"{lookup_id}.xyz"),
             }
         }
 
-
-
-
     # ------------------------------------------------------------
-    # Write .orcacosmo using orchestrator
+    # Record success (in-memory, for big JSON + summary)
     # ------------------------------------------------------------
-    def _write_orcacosmo_file(self, lookup_id, xyz_path, merged):
-        self.log(f"[ORCHESTRATE] Creating .orcacosmo for {lookup_id}")
+    def _record_success(
+        self,
+        lookup_id,
+        item_num,
+        method_used,
+        fallback_triggered,
+        elapsed_seconds,
+        log_json,
+        cpcm_json,
+        cpcm_corr_json,
+        orcacosmo_path,
+        bundle_path,
+    ):
+        inchi_key = self._get_inchi_key(lookup_id)
+        smiles = self._smiles_from_inchikey(inchi_key)
 
-        orchestrator = OrcaCosmoOrchestrator(merged, xyz_path)
-        text = orchestrator.reconstruct()
-
-        out_path = os.path.join(self.parsed_outputs_dir, f"{lookup_id}.orcacosmo")
-        with open(out_path, "w") as f:
-            f.write(text)
-
-        self.log(f"[WRITE] .orcacosmo file: {out_path}")
-
-
-    # ------------------------------------------------------------
-    # Record success
-    # ------------------------------------------------------------
-    def _record_success(self, lookup_id, bundle):
         entry = {
             "lookup_id": lookup_id,
-            "inchi_key": self._get_inchi_key(lookup_id),
-            "orcacosmo_path": os.path.join(self.orcacosmo_outputs_dir, f"{lookup_id}.orcacosmo"),
-            "bundle_path": os.path.join(self.parsed_outputs_dir, f"{lookup_id}_bundle.json"),
-            "xyz_path": os.path.join(self.inputs_dir, f"{lookup_id}.xyz"),
-            "energy": bundle.get("meta", {}).get("energy") or bundle.get("energy"),
-            "method_used": bundle["meta"]["method_used"],
-            "fallback_triggered": bundle["meta"]["fallback_triggered"],
+            "inchi_key": inchi_key,
+            "smiles": smiles,
+            "item_number": item_num,
+            "orcacosmo_path": orcacosmo_path,
+            "bundle_path": bundle_path,
+            "raw_outputs": {
+                "log": os.path.join(self.raw_outputs_dir, f"{lookup_id}.log"),
+                "cpcm": os.path.join(self.raw_outputs_dir, f"{lookup_id}.cpcm"),
+                "cpcm_corr": os.path.join(self.raw_outputs_dir, f"{lookup_id}.cpcm_corr"),
+            },
+            "method_used": method_used,
+            "fallback_triggered": fallback_triggered,
+            "elapsed_seconds": elapsed_seconds,
+            "provenance": {
+                "orca_version": self.orca_version,
+                "cpcm_radii_source": self.cpcm_file,
+                "engine_command_base": "orca",
+                "item_number": item_num,
+                "last_modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+            "parsed": {
+                "log": log_json,
+                "cpcm": cpcm_json,
+                "cpcm_corr": cpcm_corr_json,
+            },
         }
 
         self.successful_outputs.append(entry)
         self.log(f"[SUCCESS] Recorded output for {lookup_id}")
 
     # ------------------------------------------------------------
-    # Summary writer
+    # Summary writer (big JSON + CSV + mapping)
     # ------------------------------------------------------------
-    def _write_summary(self):
-        summary_path = os.path.join(self.outputs_dir, "orcacosmo_summary.json")
+    def _write_summary(self, stage_start, stage_end):
+        results_path = os.path.join(self.outputs_dir, "orcacosmo_results.json")
         mapping_path = os.path.join(self.outputs_dir, "item_to_lookup_mapping.json")
+        summary_csv = os.path.join(self.outputs_dir, "orcacosmo_summary.csv")
 
-        with AtomicWriter(summary_path) as f:
+        # Big JSON with all results
+        with AtomicWriter(results_path) as f:
             json.dump(self.successful_outputs, f, indent=2)
 
+        # Item mapping
         with AtomicWriter(mapping_path) as f:
             json.dump(self.item_to_lookup, f, indent=2)
 
-        self.log(f"Wrote summary with {len(self.successful_outputs)} entries: {summary_path}")
+        # Human-readable summary CSV
+        rows = []
+        for entry in self.successful_outputs:
+            rows.append(
+                {
+                    "lookup_id": entry["lookup_id"],
+                    "inchi_key": entry["inchi_key"],
+                    "method_used": entry["method_used"],
+                    "fallback_triggered": entry["fallback_triggered"],
+                    "elapsed_seconds": entry["elapsed_seconds"],
+                    "orcacosmo_path": entry["orcacosmo_path"],
+                    "item_number": entry["item_number"],
+                }
+            )
+
+        if rows:
+            df = pd.DataFrame(rows)
+            df.to_csv(summary_csv, index=False)
+
+        self.log(f"Wrote ORCA COSMO results JSON with {len(self.successful_outputs)} entries: {results_path}")
         self.log(f"Wrote item-to-lookup mapping with {len(self.item_to_lookup)} entries: {mapping_path}")
+        if rows:
+            self.log(f"Wrote ORCA COSMO summary CSV: {summary_csv}")
+
+        self.log(
+            f"Stage elapsed time: {stage_end - stage_start:.2f} s "
+            f"(successful={self.stats['successful']}, failed={self.stats['failed']})"
+        )
 
     # ------------------------------------------------------------
     # CPCM validation
@@ -503,7 +600,9 @@ class OrcacosmoStage(BaseStage):
         self.log(f"[VALIDATION] Basic checks passed for {os.path.basename(cpcm_path)}")
         return True
 
-
+    # ------------------------------------------------------------
+    # Metadata helpers
+    # ------------------------------------------------------------
     def _smiles_from_inchikey(self, inchikey):
         meta_path = os.path.join(
             self.metadata_dir,
@@ -521,10 +620,20 @@ class OrcacosmoStage(BaseStage):
             self.fail(f"No SMILES field in metadata JSON for InChIKey: {inchikey}")
 
         return smiles
-    
+
     def _get_inchi_key(self, lookup_id):
         for entry in self.energies_entries:
             if entry["lookup_id"] == lookup_id:
                 return entry["inchi_key"]
         self.fail(f"InChIKey not found in energies summary for {lookup_id}")
 
+    # ------------------------------------------------------------
+    # Warning summary
+    # ------------------------------------------------------------
+    def _log_warning_summary(self):
+        self.log_header("ORCA COSMO Summary")
+        self.log(f"Successful: {self.stats['successful']}")
+        self.log(f"Failed: {self.stats['failed']}")
+        self.log(f"Fallback used: {self.stats['fallback_used']}")
+        self.log(f"Missing XYZ: {self.stats['missing_xyz']}")
+        self.log_header("End ORCA COSMO Summary")

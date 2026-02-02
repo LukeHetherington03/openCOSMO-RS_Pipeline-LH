@@ -1,9 +1,10 @@
 import os
-import sys
 import json
 import shutil
-from pathlib import Path
+import time
 import traceback
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
@@ -11,7 +12,23 @@ from modules.solubility_engine.cosmors_wrapper import COSMORSWrapper
 
 
 class SolubilityStage(BaseStage):
+    """
+    Modernised SolubilityStage with:
+      - Parallel execution (config + args)
+      - Renumbering preserved for COSMO‑RS
+      - Canonical outputs:
+            solubility_results.json
+            solubility_summary.csv
+            solute/<inchi_key>/mapping.json
+      - Provenance blocks
+      - Metadata validation
+      - Wrapper output validation
+      - Strict mode
+    """
 
+    # ------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------
     def execute(self):
         self.log_header("Starting Solubility Stage")
 
@@ -20,35 +37,36 @@ class SolubilityStage(BaseStage):
         self._load_orcacosmo_summary()
         self._load_wrapper()
 
-        solute_ids = [entry["lookup_id"] for entry in self.orcacosmo_entries]
+        # List of solutes (one per inchi_key)
+        solute_ids = [entry["inchi_key"] for entry in self.orcacosmo_entries]
         self.set_items(solute_ids)
 
-        self.successful_calcs = []
+        # Results accumulated here
+        self.results = []
+        self.stats = {
+            "successful": 0,
+            "failed": 0,
+            "missing_metadata": 0,
+            "missing_conformers": 0,
+        }
 
-        for lookup_id in list(self.job.pending_items):
-            try:
-                self._process_solute(lookup_id)
-                self.update_progress(lookup_id)
-            except Exception as e:
-                tb = traceback.format_exc()
-                self.log(f"[ERROR] {lookup_id}: {e}")
-                self._debug(f"Full traceback:\n{tb}")
-                self.update_progress(lookup_id, success=False)
+        stage_start = time.perf_counter()
 
-        self._write_summary()
+        # ------------------------------------------------------------
+        # Parallel or sequential execution
+        # ------------------------------------------------------------
+        if self.parallel:
+            self._run_parallel(solute_ids)
+        else:
+            self._run_sequential(solute_ids)
+
+        stage_end = time.perf_counter()
+
+        self._write_global_outputs(stage_start, stage_end)
+        self._log_warning_summary()
+
         self.log_header("Solubility Stage Complete")
         self.job.mark_complete()
-
-    # ------------------------------------------------------------
-    # Debug helper
-    # ------------------------------------------------------------
-    def _debug(self, msg: str):
-        self.log(f"[DEBUG] {msg}")
-        try:
-            with open(self.debug_log_path, "a") as f:
-                f.write(msg + "\n")
-        except Exception:
-            pass
 
     # ------------------------------------------------------------
     # Directory setup
@@ -65,16 +83,14 @@ class SolubilityStage(BaseStage):
         os.makedirs(logs_dir, exist_ok=True)
         self.debug_log_path = os.path.join(logs_dir, "solubility_debug.log")
 
-        os.makedirs(self.cosmo_root, exist_ok=True)
-        os.makedirs(self.solute_cosmo_root, exist_ok=True)
-        os.makedirs(self.solvent_cosmo_root, exist_ok=True)
-        os.makedirs(self.workdir, exist_ok=True)
-        os.makedirs(self.results_dir, exist_ok=True)
-
-        self._debug(
-            f"Prepared directories: cosmo_root={self.cosmo_root}, "
-            f"workdir={self.workdir}, results_dir={self.results_dir}"
-        )
+        for d in [
+            self.cosmo_root,
+            self.solute_cosmo_root,
+            self.solvent_cosmo_root,
+            self.workdir,
+            self.results_dir,
+        ]:
+            os.makedirs(d, exist_ok=True)
 
     # ------------------------------------------------------------
     # Load config
@@ -82,7 +98,7 @@ class SolubilityStage(BaseStage):
     def _load_stage_config(self):
         self.summary_file = self.parameters.get("summary_file")
         if not self.summary_file:
-            self.fail("SolubilityStage requires 'summary_file' in parameters")
+            self.fail("SolubilityStage requires 'summary_file'")
         if not os.path.exists(self.summary_file):
             self.fail(f"summary_file does not exist: {self.summary_file}")
 
@@ -101,22 +117,23 @@ class SolubilityStage(BaseStage):
         with open(defaults_file) as f:
             defaults = json.load(f)
 
+        # Defaults from JSON
         self.default_solvent = defaults.get("default_solvent", "water")
         self.default_temperature = defaults.get("default_temperature", 298.15)
         self.default_SORcf = defaults.get("default_SORcf", 1.0)
+        self.default_parallel = defaults.get("parallel", True)
+        self.default_workers = defaults.get("n_workers", 4)
 
+        # Overrideable via args
         self.solvent_name = self.parameters.get("solvent_name", self.default_solvent)
         self.temperature = self.parameters.get("temperature", self.default_temperature)
         self.SORcf = self.parameters.get("SORcf", self.default_SORcf)
         self.calculations = self.parameters.get("calculations", "mixed_only")
 
-        self.GLOBAL_METADATA_DIR = self.metadata_dir
-        self.GLOBAL_SOLVENT_DIR = self.solvent_dir
+        self.parallel = self.parameters.get("parallel", self.default_parallel)
+        self.n_workers = self.parameters.get("n_workers", self.default_workers)
 
-        self._debug(
-            f"Config loaded: solvent={self.solvent_name}, T={self.temperature}, "
-            f"SORcf={self.SORcf}, calculations={self.calculations}"
-        )
+        self.strict_mode = bool(sol_cfg.get("strict", False))
 
     # ------------------------------------------------------------
     # Load COSMO summary
@@ -129,15 +146,15 @@ class SolubilityStage(BaseStage):
         for entry in raw_entries:
             inchi_key = entry.get("inchi_key")
             path = entry.get("orcacosmo_path")
+            lookup_id = entry.get("lookup_id")
             if not inchi_key or not path:
                 continue
-            grouped.setdefault(inchi_key, []).append(path)
+            grouped.setdefault(inchi_key, []).append((lookup_id, path))
 
         self.orcacosmo_entries = [
             {
-                "lookup_id": inchi_key,
                 "inchi_key": inchi_key,
-                "conformer_paths": paths,
+                "conformers": paths,  # list of (lookup_id, path)
             }
             for inchi_key, paths in grouped.items()
         ]
@@ -153,10 +170,10 @@ class SolubilityStage(BaseStage):
         )
 
     # ------------------------------------------------------------
-    # Load metadata
+    # Metadata loader
     # ------------------------------------------------------------
     def _load_metadata(self, inchi_key):
-        global_path = os.path.join(self.GLOBAL_METADATA_DIR, f"{inchi_key}.json")
+        global_path = os.path.join(self.metadata_dir, f"{inchi_key}.json")
         job_path = os.path.join(self.inputs_dir, "molecule_metadata", f"{inchi_key}.json")
 
         if os.path.exists(global_path):
@@ -167,6 +184,7 @@ class SolubilityStage(BaseStage):
             with open(job_path) as f:
                 return json.load(f)
 
+        self.stats["missing_metadata"] += 1
         return {
             "lookup_id": inchi_key,
             "melting_temp": "N/A",
@@ -176,21 +194,85 @@ class SolubilityStage(BaseStage):
         }
 
     # ------------------------------------------------------------
+    # Parallel execution
+    # ------------------------------------------------------------
+    def _run_parallel(self, solute_ids):
+        self.log(f"[INFO] Running in parallel with {self.n_workers} workers")
+
+        with ProcessPoolExecutor(max_workers=self.n_workers) as exe:
+            futures = {
+                exe.submit(self._process_solute_safe, inchi_key): inchi_key
+                for inchi_key in solute_ids
+            }
+
+            for fut in as_completed(futures):
+                inchi_key = futures[fut]
+                try:
+                    result = fut.result()
+                    if result:
+                        self.results.append(result)
+                        self.stats["successful"] += 1
+                except Exception as e:
+                    self.stats["failed"] += 1
+                    self.log(f"[ERROR] {inchi_key}: {e}")
+
+    # ------------------------------------------------------------
+    # Sequential execution
+    # ------------------------------------------------------------
+    def _run_sequential(self, solute_ids):
+        for inchi_key in solute_ids:
+            try:
+                result = self._process_solute_safe(inchi_key)
+                if result:
+                    self.results.append(result)
+                    self.stats["successful"] += 1
+            except Exception as e:
+                self.stats["failed"] += 1
+                self.log(f"[ERROR] {inchi_key}: {e}")
+
+    # ------------------------------------------------------------
+    # Safe wrapper for parallel execution
+    # ------------------------------------------------------------
+    def _process_solute_safe(self, inchi_key):
+        try:
+            return self._process_solute(inchi_key)
+        except Exception as e:
+            if self.strict_mode:
+                raise
+            tb = traceback.format_exc()
+            self.log(f"[ERROR] {inchi_key}: {e}")
+            self.log(f"[DEBUG] Traceback:\n{tb}")
+            return None
+
+    # ------------------------------------------------------------
     # Process a single solute
     # ------------------------------------------------------------
-    def _process_solute(self, lookup_id):
-        entry = next((e for e in self.orcacosmo_entries if e["lookup_id"] == lookup_id), None)
+    def _process_solute(self, inchi_key):
+        entry = next((e for e in self.orcacosmo_entries if e["inchi_key"] == inchi_key), None)
         if not entry:
-            raise ValueError(f"No COSMO entry found for {lookup_id}")
+            raise ValueError(f"No COSMO entry found for {inchi_key}")
 
-        inchi_key = entry["inchi_key"]
-        conformer_paths = entry["conformer_paths"]
+        conformers = entry["conformers"]  # list of (lookup_id, path)
         metadata = self._load_metadata(inchi_key)
 
-        solute_dir = self._copy_and_renumber_conformers(inchi_key, conformer_paths)
+        if not conformers:
+            self.stats["missing_conformers"] += 1
+            raise RuntimeError(f"No conformers found for {inchi_key}")
+
+        # ------------------------------------------------------------
+        # Renumber solute conformers (COSMO‑RS requirement)
+        # ------------------------------------------------------------
+        solute_dir, mapping = self._copy_and_renumber_conformers(inchi_key, conformers)
+
+        # ------------------------------------------------------------
+        # Renumber solvent conformers
+        # ------------------------------------------------------------
         solvent_dir = self._copy_and_renumber_solvent()
 
-        # Run wrapper (now returns raw_output + result)
+        # ------------------------------------------------------------
+        # Run COSMO‑RS wrapper
+        # ------------------------------------------------------------
+        start = time.perf_counter()
         wrapper_out = self.wrapper.run(
             job_dir=Path(self.workdir),
             solute_name=inchi_key,
@@ -200,94 +282,102 @@ class SolubilityStage(BaseStage):
             solvent_name=self.solvent_name,
             solvent_dir=Path(solvent_dir),
         )
+        elapsed = time.perf_counter() - start
+
+        # Validate wrapper output
+        if "result" not in wrapper_out or "x_solubility" not in wrapper_out["result"]:
+            raise RuntimeError(f"COSMO‑RS returned incomplete result for {inchi_key}")
+
+        sol = wrapper_out["result"]["x_solubility"]
 
         # ------------------------------------------------------------
         # Write raw COSMO‑RS output
         # ------------------------------------------------------------
-        raw_path = os.path.join(self.workdir, f"{inchi_key}_raw_output.txt")
+        raw_path = os.path.join(self.results_dir, f"{inchi_key}_raw.txt")
         with open(raw_path, "w") as f:
             f.write(wrapper_out["raw_output"])
 
         # ------------------------------------------------------------
-        # Write machine‑readable JSON
+        # Write per‑solute JSON
         # ------------------------------------------------------------
-        out_json = os.path.join(self.results_dir, f"{inchi_key}_solubility.json")
+        out_json = os.path.join(self.results_dir, f"{inchi_key}.json")
         with AtomicWriter(out_json) as f:
             json.dump(
                 {
-                    "request_id": self.request.request_id,
-                    "job_id": self.job.job_id,
-                    "lookup_id": inchi_key,
                     "inchi_key": inchi_key,
                     "smiles": metadata.get("smiles", ""),
                     "solvent": self.solvent_name,
                     "temperature_K": self.temperature,
+                    "solubility_x": sol,
                     "n_solute_confs": wrapper_out["n_solute"],
                     "n_solvent_confs": wrapper_out["n_solvent"],
-                    "solubility_result": wrapper_out["result"],
+                    "renumbered_mapping": mapping,
                     "raw_output_path": raw_path,
+                    "provenance": {
+                        "cosmors_version": wrapper_out.get("version", "unknown"),
+                        "parallel": self.parallel,
+                        "n_workers": self.n_workers,
+                        "elapsed_seconds": elapsed,
+                        "last_modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
                 },
                 f,
                 indent=2,
             )
 
         # ------------------------------------------------------------
-        # Write human‑readable summary
+        # Write human summary
         # ------------------------------------------------------------
         human_path = os.path.join(self.results_dir, f"{inchi_key}_summary.txt")
-        sol = wrapper_out["result"].get("x_solubility", None)
-
-        summary_txt = f"""
-Solubility Summary
-------------------
-Request: {self.request.request_id}
-Job: {self.job.job_id}
-
-Molecule: {inchi_key}
-SMILES: {metadata.get("smiles","")}
-Solvent: {self.solvent_name}
-Temperature: {self.temperature} K
-
-Mole fraction solubility: {sol}
-"""
-
         with open(human_path, "w") as f:
-            f.write(summary_txt.strip() + "\n")
+            f.write(
+                f"Solubility Summary\n"
+                f"------------------\n"
+                f"Molecule: {inchi_key}\n"
+                f"SMILES: {metadata.get('smiles','')}\n"
+                f"Solvent: {self.solvent_name}\n"
+                f"Temperature: {self.temperature} K\n"
+                f"Mole fraction solubility: {sol}\n"
+            )
 
-        # Track success
-        self.successful_calcs.append({
+        return {
             "inchi_key": inchi_key,
-            "solubility": sol,
+            "solubility_x": sol,
             "json": out_json,
             "summary": human_path,
             "raw_output": raw_path,
-        })
+            "n_confs": wrapper_out["n_solute"],
+        }
 
     # ------------------------------------------------------------
-    # Copy solute conformers
+    # Renumber solute conformers (COSMO‑RS requirement)
     # ------------------------------------------------------------
-    def _copy_and_renumber_conformers(self, inchi_key, conformer_paths):
+    def _copy_and_renumber_conformers(self, inchi_key, conformers):
         out_dir = os.path.join(self.solute_cosmo_root, inchi_key)
         os.makedirs(out_dir, exist_ok=True)
 
-        count = 0
-        for path in conformer_paths:
+        mapping = {}
+        for i, (lookup_id, path) in enumerate(conformers):
             if not os.path.exists(path):
                 continue
-            new_name = f"{inchi_key}_c{count:03d}.orcacosmo"
+            new_name = f"{inchi_key}_c{i:03d}.orcacosmo"
             shutil.copy(path, os.path.join(out_dir, new_name))
-            count += 1
+            mapping[f"c{i:03d}"] = lookup_id
 
-        if count == 0:
+        if not mapping:
             raise RuntimeError(f"No valid solute conformers found for {inchi_key}")
 
-        return out_dir
+        # Write mapping.json
+        with AtomicWriter(os.path.join(out_dir, "mapping.json")) as f:
+            json.dump(mapping, f, indent=2)
+
+        return out_dir, mapping
 
     # ------------------------------------------------------------
-    # Copy solvent conformers
+    # Renumber solvent conformers
     # ------------------------------------------------------------
     def _copy_and_renumber_solvent(self):
-        solvent_path = os.path.join(self.GLOBAL_SOLVENT_DIR, self.solvent_name)
+        solvent_path = os.path.join(self.solvent_dir, self.solvent_name)
         out_dir = os.path.join(self.solvent_cosmo_root, self.solvent_name)
         os.makedirs(out_dir, exist_ok=True)
 
@@ -302,19 +392,37 @@ Mole fraction solubility: {sol}
         return out_dir
 
     # ------------------------------------------------------------
-    # Write global summary
+    # Write global outputs
     # ------------------------------------------------------------
-    def _write_summary(self):
-        summary_path = os.path.join(self.outputs_dir, "solubility_summary.json")
-        with AtomicWriter(summary_path) as f:
-            json.dump(
-                {
-                    "request_id": self.job.get_request_id(),
-                    "job_id": self.get_job_id(),
-                    "n_molecules": len(self.successful_calcs),
-                    "results": self.successful_calcs,
-                },
-                f,
-                indent=2,
-            )
-        self.log(f"Wrote solubility summary: {summary_path}")
+    def _write_global_outputs(self, stage_start, stage_end):
+        results_path = os.path.join(self.outputs_dir, "solubility_results.json")
+        summary_csv = os.path.join(self.outputs_dir, "solubility_summary.csv")
+
+        # Big JSON
+        with AtomicWriter(results_path) as f:
+            json.dump(self.results, f, indent=2)
+
+        # CSV summary
+        import pandas as pd
+        if self.results:
+            df = pd.DataFrame(self.results)
+            df.to_csv(summary_csv, index=False)
+
+        self.log(f"Wrote solubility_results.json with {len(self.results)} entries")
+        self.log(f"Wrote solubility_summary.csv")
+
+        self.log(
+            f"Stage elapsed time: {stage_end - stage_start:.2f} s "
+            f"(successful={self.stats['successful']}, failed={self.stats['failed']})"
+        )
+
+    # ------------------------------------------------------------
+    # Warning summary
+    # ------------------------------------------------------------
+    def _log_warning_summary(self):
+        self.log_header("Solubility Summary")
+        self.log(f"Successful: {self.stats['successful']}")
+        self.log(f"Failed: {self.stats['failed']}")
+        self.log(f"Missing metadata: {self.stats['missing_metadata']}")
+        self.log(f"Missing conformers: {self.stats['missing_conformers']}")
+        self.log_header("End Solubility Summary")

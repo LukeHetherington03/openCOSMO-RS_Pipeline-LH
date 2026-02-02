@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "lookup_id": "GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000",
+    "inchi_key": "GWZMWHWAWHPNHN-RXMQYKEDSA-N",
+    "smiles": "C=CC(=O)OCC(C)O",
+    "method_used": "TZVPD",
+    "fallback_triggered": false,
+    "orca_input_path": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/requests/R-30Jan26-1553-25719-continue_orcacosmo/jobs/J-30Jan26-1553-25720-orcacosmo/outputs/orca_inputs/GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000_tzvpd.inp",
+    "cpcm_radii_source": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/chemistry/cpcm_radii.json"
+  },
+  "paths": {
+    "log": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/requests/R-30Jan26-1553-25719-continue_orcacosmo/jobs/J-30Jan26-1553-25720-orcacosmo/outputs/parsed_outputs/GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000.log.json",
+    "cpcm": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/requests/R-30Jan26-1553-25719-continue_orcacosmo/jobs/J-30Jan26-1553-25720-orcacosmo/outputs/parsed_outputs/GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000.cpcm.json",
+    "cpcm_corr": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/requests/R-30Jan26-1553-25719-continue_orcacosmo/jobs/J-30Jan26-1553-25720-orcacosmo/outputs/parsed_outputs/GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000.cpcm_corr.json",
+    "xyz": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/requests/R-30Jan26-1553-25719-continue_orcacosmo/jobs/J-30Jan26-1553-25720-orcacosmo/inputs/GWZMWHWAWHPNHN-RXMQYKEDSA-N_conf000.xyz"
+  }
+}

@@ -1,35 +1,35 @@
 import os
 import json
-import time
 import pandas as pd
+from datetime import datetime
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
+from modules.utils.conformers import ConformerRecord, ConformerSet
 
 
 GENERATION_BACKENDS = {
     "rdkit": "_backend_rdkit",
-    "babel": "_backend_babel",
-    "crest": "_backend_crest",
+    # future: "babel": "_backend_babel",
+    # future: "crest": "_backend_crest",
 }
 
 
 class GenerationStage(BaseStage):
     """
-    Clean, unified conformer generation stage.
+    Conformer generation stage.
 
     Responsibilities:
-      - Load + validate cleaned dataset (summary_file)
-      - Canonicalise SMILES
+      - Load cleaned dataset (clean_dataset.csv from CleaningStage)
+      - Validate and canonicalise SMILES
       - Generate conformers using selected backend
       - Write:
           - xyz/ files
-          - summary.csv
-          - energies.json
-          - molecule_metadata/<InChIKey>.json (job-local)
-          - GLOBAL_METADATA_DIR/<InChIKey>.json (global, no overwrite)
+          - summary.csv (conformer-level)
+          - energies.json (flat list of conformer records)
+          - job_state.json
     """
 
     # ------------------------------------------------------------
@@ -38,23 +38,17 @@ class GenerationStage(BaseStage):
     def execute(self):
         self.log_header("Starting Generation Stage")
 
-        cfg = self.config
-        if not cfg:
-            self.fail("GenerationStage: missing config in job.config")
-
-        self.GLOBAL_METADATA_DIR = cfg["constant_files"]["metadata_dir"]
-        os.makedirs(self.GLOBAL_METADATA_DIR, exist_ok=True)
+        cfg = self.config or {}
+        self.strict_mode = bool(cfg.get("generation", {}).get("strict", False))
 
         params = self.parameters
 
         summary_file = params.get("summary_file")
         if summary_file is None:
-            self.fail("GenerationStage requires summary_file produced by CleaningStage.")
+            summary_file = self._auto_detect_clean_dataset()
 
         if not os.path.isfile(summary_file):
-            self.fail(f"summary_file does not exist: {summary_file}")
-
-        input_csvs = [summary_file]
+            self.fail(f"GenerationStage: summary_file does not exist: {summary_file}")
 
         num_confs = params.get("num_confs", 5)
         seed = params.get("seed", 42)
@@ -63,111 +57,122 @@ class GenerationStage(BaseStage):
         self.log(f"Backend: {backend}")
         self.log(f"Input summary file: {summary_file}")
         self.log(f"Conformers per molecule: {num_confs}")
+        self.log(f"Strict mode: {self.strict_mode}")
 
         dirs = self._prepare_directories()
+        df_all = self._load_csv(summary_file)
 
-        df_all = self._load_and_merge_csvs(input_csvs)
+        valid_rows = self._validate_rows(df_all)
+        self.set_items([row_idx for row_idx, *_ in valid_rows])
 
-        valid_rows = self._validate_and_canonicalise(df_all)
+        self.warnings = {
+            "embedding_failures": 0,
+            "optimisation_failures": 0,
+            "zero_conformers": 0,
+        }
 
-        self.set_items([idx for idx, *_ in valid_rows])
-
-        results = self._dispatch_backend(
+        conformer_set = self._dispatch_backend(
             backend=backend,
             valid_rows=valid_rows,
             num_confs=num_confs,
             seed=seed,
-            xyz_out_dir=dirs["xyz"]
+            xyz_out_dir=dirs["xyz"],
         )
+
+        if len(conformer_set) == 0:
+            self.fail("Generation produced zero conformers.")
 
         self._write_outputs(
-            results=results,
-            input_csvs=input_csvs,
+            conformer_set=conformer_set,
             dirs=dirs,
-            valid_rows=valid_rows,
-            total_rows=len(df_all)
+            num_valid=len(valid_rows),
+            total_rows=len(df_all),
+            backend=backend,
+            num_confs=num_confs,
+            seed=seed,
         )
 
+        self._log_warning_summary()
         self.log_header("Generation Stage Complete")
         self.job.mark_complete()
 
     # ------------------------------------------------------------
     # Helpers: Input handling
     # ------------------------------------------------------------
+    def _auto_detect_clean_dataset(self) -> str:
+        candidates = [
+            os.path.join(self.inputs_dir, "clean_dataset.csv"),
+            os.path.join(self.outputs_dir, "clean_dataset.csv"),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                self.log(f"Auto-detected clean_dataset.csv at: {path}")
+                return path
+        self.fail(
+            "GenerationStage: summary_file not provided and clean_dataset.csv "
+            "could not be auto-detected."
+        )
+
     def _prepare_directories(self):
         dirs = {
             "inputs": self.inputs_dir,
             "outputs": self.outputs_dir,
             "xyz": os.path.join(self.outputs_dir, "xyz"),
-            "raw": os.path.join(self.outputs_dir, "raw"),
-            "metadata": os.path.join(self.outputs_dir, "molecule_metadata"),
         }
         for d in dirs.values():
             os.makedirs(d, exist_ok=True)
         return dirs
 
-    def _load_and_merge_csvs(self, csv_paths):
-        dfs = []
-
-        for path in csv_paths:
-            if not os.path.exists(path):
-                self.log(f"[WARNING] Missing CSV: {path}")
-                continue
-            try:
-                df = pd.read_csv(path)
-                dfs.append(df)
-            except Exception as e:
-                self.log(f"[WARNING] Failed to load {path}: {e}")
-
-        if not dfs:
-            self.fail("No valid CSVs loaded.")
-
-        merged = pd.concat(dfs, ignore_index=True)
-        self.log(f"Loaded {len(merged)} rows from CSVs")
-        return merged
+    def _load_csv(self, path: str) -> pd.DataFrame:
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            self.fail(f"Failed to load summary_file {path}: {e}")
+        self.log(f"Loaded {len(df)} rows from {path}")
+        return df
 
     # ------------------------------------------------------------
     # Helpers: Molecule validation
     # ------------------------------------------------------------
-    def _validate_and_canonicalise(self, df):
+    def _validate_rows(self, df: pd.DataFrame):
+        """
+        Validate presence of inchi_key and smiles, canonicalise smiles.
+        Returns a list of tuples: (row_idx, inchi_key, smiles, row)
+        """
         valid = []
 
         for idx, row in df.iterrows():
-            smiles = row.get("smiles") or row.get("SMILES") or row.get("mol")
+            inchi_key = row.get("inchi_key")
+            smiles = row.get("smiles")
+
+            if not inchi_key or not isinstance(inchi_key, str):
+                msg = f"Row {idx}: missing or invalid inchi_key"
+                self.log(f"[ERROR] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
+                continue
+
             if not smiles:
+                msg = f"Row {idx}: missing SMILES"
+                self.log(f"[ERROR] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
                 continue
 
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
+                msg = f"Row {idx}: invalid SMILES '{smiles}'"
+                self.log(f"[WARNING] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
                 continue
 
-            smiles = Chem.MolToSmiles(mol, canonical=True)
+            smiles_canon = Chem.MolToSmiles(mol, canonical=True)
+            row["smiles"] = smiles_canon
 
-            # ----------------------------------------------------
-            # NEW: Normalise melting_temp and melting_temp_source
-            # ----------------------------------------------------
-            melting_temp = row.get("melting_temp")
-            if pd.notna(melting_temp):
-                try:
-                    melting_temp = float(str(melting_temp).strip())
-                except Exception:
-                    melting_temp = None
-            else:
-                melting_temp = None
+            valid.append((idx, inchi_key, smiles_canon, row))
 
-            melting_temp_source = row.get("melting_temp_source")
-            if isinstance(melting_temp_source, str):
-                melting_temp_source = melting_temp_source.strip()
-                if melting_temp_source == "":
-                    melting_temp_source = None
-
-            # Store back into row so backend sees correct values
-            row["melting_temp"] = melting_temp
-            row["melting_temp_source"] = melting_temp_source
-
-            valid.append((idx, smiles, row))
-
-        self.log(f"Valid molecules: {len(valid)}")
+        self.log(f"Valid molecules for generation: {len(valid)}")
         return valid
 
     # ------------------------------------------------------------
@@ -188,131 +193,126 @@ class GenerationStage(BaseStage):
     # Backend: RDKit
     # ------------------------------------------------------------
     def _backend_rdkit(self, valid_rows, num_confs, seed, xyz_out_dir):
-        results = []
+        conformer_set = ConformerSet()
+        timestamp = datetime.utcnow().isoformat() + "Z"
 
-        for idx, smiles, row in valid_rows:
-            self.log_section(f"Generating for SMILES: {smiles}")
+        for idx, inchi_key, smiles, row in valid_rows:
+            self.log_section(f"Generating conformers for {inchi_key} ({smiles})")
 
-            mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+            base_mol = Chem.MolFromSmiles(smiles)
+            if base_mol is None:
+                msg = f"Row {idx}: RDKit failed to parse SMILES '{smiles}'"
+                self.log(f"[WARNING] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
+                self.warnings["embedding_failures"] += 1
+                self.update_progress(idx, success=False)
+                continue
+
+            mol = Chem.AddHs(base_mol)
             params = AllChem.ETKDGv3()
             params.randomSeed = seed
 
             try:
                 conf_ids = AllChem.EmbedMultipleConfs(mol, num_confs, params)
             except Exception as e:
-                self.log(f"[WARNING] RDKit embedding failed: {e}")
+                msg = f"RDKit embedding failed for {inchi_key}: {e}"
+                self.log(f"[WARNING] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
+                self.warnings["embedding_failures"] += 1
                 self.update_progress(idx, success=False)
                 continue
 
-            inchi = Chem.inchi.MolToInchi(mol)
-            inchi_key = Chem.inchi.InchiToInchiKey(inchi)
+            if len(conf_ids) == 0:
+                msg = f"No conformers generated for {inchi_key}"
+                self.log(f"[WARNING] {msg}")
+                if self.strict_mode:
+                    self.fail(msg)
+                self.warnings["zero_conformers"] += 1
+                self.update_progress(idx, success=False)
+                continue
 
-            melting_temp = row.get("melting_temp")
-            melting_temp_source = row.get("melting_temp_source")
+            for local_conf_idx, conf_id in enumerate(conf_ids):
+                conf_num = int(local_conf_idx)
 
-            for conf_id in conf_ids:
                 try:
                     AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
-                    energy = AllChem.UFFGetMoleculeForceField(mol, confId=conf_id).CalcEnergy()
+                    ff = AllChem.UFFGetMoleculeForceField(mol, confId=conf_id)
+                    energy = float(ff.CalcEnergy())
                 except Exception as e:
-                    self.log(f"[WARNING] UFF optimisation failed: {e}")
+                    msg = f"UFF optimisation failed for {inchi_key} conf {conf_num}: {e}"
+                    self.log(f"[WARNING] {msg}")
+                    if self.strict_mode:
+                        self.fail(msg)
+                    self.warnings["optimisation_failures"] += 1
                     continue
 
-                lookup_id = f"{inchi_key}_conf{conf_id:03d}"
+                xyz_path = os.path.join(
+                    xyz_out_dir,
+                    f"{inchi_key}_conf{conf_num:03d}.xyz",
+                )
 
-                xyz_path = os.path.join(xyz_out_dir, f"{lookup_id}.xyz")
-                self._write_xyz(mol, conf_id, xyz_path)
-
-                results.append({
-                    "lookup_id": lookup_id,
-                    "inchi": inchi,
-                    "inchi_key": inchi_key,
-                    "energy": energy,
-                    "xyz_path": xyz_path,
-                    "metadata": {
-                        "smiles": smiles,
+                record = ConformerRecord(
+                    inchi_key=inchi_key,
+                    conf_num=conf_num,
+                    xyz_path=xyz_path,
+                    energy=energy,
+                    smiles=smiles,
+                    provenance={
+                        "backend": "rdkit",
+                        "seed": seed,
+                        "generation_timestamp": timestamp,
                         "source_row": int(idx),
-                        "melting_temp": melting_temp,
-                        "melting_temp_source": melting_temp_source,
-                    }
-                })
+                    },
+                )
+
+                self._write_xyz(mol, conf_id, xyz_path)
+                conformer_set.add(record)
 
             self.update_progress(idx)
 
-        return results
+        return conformer_set
 
     # ------------------------------------------------------------
     # Helpers: Output writing
     # ------------------------------------------------------------
-    def _write_outputs(self, results, input_csvs, dirs, valid_rows, total_rows):
-
-        if not results:
-            self.fail("Generation produced zero conformers.")
-
+    def _write_outputs(
+        self,
+        conformer_set: ConformerSet,
+        dirs,
+        num_valid,
+        total_rows,
+        backend,
+        num_confs,
+        seed,
+    ):
+        # summary.csv
         summary_path = os.path.join(dirs["outputs"], "summary.csv")
         with AtomicWriter(summary_path) as f:
-            pd.DataFrame(results).to_csv(f, index=False)
+            pd.DataFrame(conformer_set.to_list()).to_csv(f, index=False)
 
+        # energies.json
         energies_path = os.path.join(dirs["outputs"], "energies.json")
-        with AtomicWriter(energies_path) as f:
-            json.dump(results, f, indent=2)
+        conformer_set.save(energies_path)
 
-        self._write_metadata_templates(results, dirs["metadata"])
-
+        # job_state.json
         job_state_path = os.path.join(self.job.job_dir, "job_state.json")
         with AtomicWriter(job_state_path) as f:
             json.dump(
                 {
                     "stage": "generation",
-                    "num_input_csvs": len(input_csvs),
-                    "num_valid_molecules": len(valid_rows),
+                    "backend": backend,
+                    "num_valid_molecules": num_valid,
                     "num_total_rows": total_rows,
-                    "num_conformers": len(results),
+                    "num_conformers": len(conformer_set),
+                    "num_confs_requested": num_confs,
+                    "seed": seed,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
                 },
                 f,
                 indent=2,
             )
-
-    # ------------------------------------------------------------
-    # Write molecule metadata templates
-    # ------------------------------------------------------------
-    def _write_metadata_templates(self, results, job_metadata_dir):
-
-        molecules = {}
-        for entry in results:
-            key = entry["inchi_key"]
-            molecules.setdefault(key, entry)
-
-        for inchi_key, entry in molecules.items():
-
-            md = entry["metadata"]
-
-            template = {
-                "lookup_id": inchi_key,
-                "inchi_key": inchi_key,
-                "inchi": entry["inchi"],
-                "smiles": md["smiles"],
-
-                "melting_temp": md.get("melting_temp", None),
-                "melting_temp_source": md.get("melting_temp_source", None),
-
-                "Hfus": "N/A",
-                "Gfus_model": "MyrdalYalkowsky",
-
-                "notes": "Fill in melting point, Hfus, and Gfus model if known."
-            }
-
-            job_path = os.path.join(job_metadata_dir, f"{inchi_key}.json")
-            with AtomicWriter(job_path) as f:
-                json.dump(template, f, indent=2)
-
-            global_path = os.path.join(self.GLOBAL_METADATA_DIR, f"{inchi_key}.json")
-
-            if not os.path.exists(global_path):
-                with AtomicWriter(global_path) as f:
-                    json.dump(template, f, indent=2)
-            else:
-                self.log(f"[INFO] Global metadata exists, not overwriting: {global_path}")
 
     # ------------------------------------------------------------
     # Helpers: XYZ writer
@@ -327,3 +327,27 @@ class GenerationStage(BaseStage):
             for atom in atoms:
                 pos = conf.GetAtomPosition(atom.GetIdx())
                 f.write(f"{atom.GetSymbol()} {pos.x:.6f} {pos.y:.6f} {pos.z:.6f}\n")
+
+    # ------------------------------------------------------------
+    # Warning summary
+    # ------------------------------------------------------------
+    def _log_warning_summary(self):
+        total = sum(self.warnings.values())
+        if total == 0:
+            self.log("Generation completed with no warnings.")
+            return
+
+        self.log("Generation completed with warnings:")
+        if self.warnings["embedding_failures"] > 0:
+            self.log(
+                f" - Embedding failures: {self.warnings['embedding_failures']} molecule(s)."
+            )
+        if self.warnings["optimisation_failures"] > 0:
+            self.log(
+                f" - Optimisation failures: {self.warnings['optimisation_failures']} conformer(s)."
+            )
+        if self.warnings["zero_conformers"] > 0:
+            self.log(
+                f" - Zero conformers generated for "
+                f"{self.warnings['zero_conformers']} molecule(s)."
+            )
