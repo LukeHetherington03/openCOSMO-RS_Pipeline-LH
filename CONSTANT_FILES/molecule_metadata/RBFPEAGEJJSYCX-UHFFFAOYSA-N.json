@@ -1,10 +1,31 @@
 {
-  "lookup_id": "RBFPEAGEJJSYCX-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "RBFPEAGEJJSYCX-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C12H22O5/c1-4-14-5-6-15-7-8-16-9-10-17-12(13)11(2)3/h2,4-10H2,1,3H3",
   "smiles": "C=C(C)C(=O)OCCOCCOCCOCC",
+  "mol_name": "2-[2-(2-ethoxyethoxy)ethoxy]ethyl methacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 11,
+  "molecular_weight": 246.146723804,
+  "heavy_atom_count": 17,
+  "hbond_donors": 0,
+  "hbond_acceptors": 5,
+  "tpsa": 53.99000000000001,
+  "logp": 1.1753999999999998,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
   "melting_temp": "N/A",
+  "melting_temp_source": "N/A",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.004469725
 }

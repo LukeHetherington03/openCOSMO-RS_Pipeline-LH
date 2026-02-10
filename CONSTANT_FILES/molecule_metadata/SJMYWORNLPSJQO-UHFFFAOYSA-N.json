@@ -1,10 +1,31 @@
 {
-  "lookup_id": "SJMYWORNLPSJQO-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "SJMYWORNLPSJQO-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C8H14O2/c1-6(2)7(9)10-8(3,4)5/h1H2,2-5H3",
   "smiles": "C=C(C)C(=O)OC(C)(C)C",
-  "melting_temp": "N/A",
+  "mol_name": "tert-butyl methacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 1,
+  "molecular_weight": 142.099379688,
+  "heavy_atom_count": 10,
+  "hbond_donors": 0,
+  "hbond_acceptors": 2,
+  "tpsa": 26.3,
+  "logp": 1.9042,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "213.15",
+  "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 5.87269e-05
 }

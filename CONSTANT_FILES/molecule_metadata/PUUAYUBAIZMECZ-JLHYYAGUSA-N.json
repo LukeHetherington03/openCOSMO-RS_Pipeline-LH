@@ -1,10 +1,31 @@
 {
-  "lookup_id": "PUUAYUBAIZMECZ-JLHYYAGUSA-N",
+  "metadata_version": 1,
   "inchi_key": "PUUAYUBAIZMECZ-JLHYYAGUSA-N",
-  "inchi": "InChI=1S/C20H22O4S/c1-23-20(24-2,17-6-4-3-5-7-17)19(22)13-10-16-8-11-18(12-9-16)25-15-14-21/h3-13,21H,14-15H2,1-2H3/b13-10+",
   "smiles": "COC(OC)(C(=O)/C=C/c1ccc(SCCO)cc1)c1ccccc1",
-  "melting_temp": "N/A",
+  "mol_name": "WS-DMPP-(L)-S(EtOH)",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 9,
+  "molecular_weight": 358.12388018400003,
+  "heavy_atom_count": 25,
+  "hbond_donors": 1,
+  "hbond_acceptors": 5,
+  "tpsa": 55.760000000000005,
+  "logp": 3.499100000000003,
+  "aromatic_rings": 2,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "oil",
+  "melting_temp_source": "https://doi.org/10.1021/acs.chemmater.4c00372",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.000198081
 }

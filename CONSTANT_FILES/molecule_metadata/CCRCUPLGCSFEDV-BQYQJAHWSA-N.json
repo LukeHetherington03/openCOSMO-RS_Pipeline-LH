@@ -1,10 +1,31 @@
 {
-  "lookup_id": "CCRCUPLGCSFEDV-BQYQJAHWSA-N",
+  "metadata_version": 1,
   "inchi_key": "CCRCUPLGCSFEDV-BQYQJAHWSA-N",
-  "inchi": "InChI=1S/C10H10O2/c1-12-10(11)8-7-9-5-3-2-4-6-9/h2-8H,1H3/b8-7+",
   "smiles": "COC(=O)/C=C/c1ccccc1",
-  "melting_temp": "N/A",
+  "mol_name": "methyl 3-phenylacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 2,
+  "molecular_weight": 162.06807956,
+  "heavy_atom_count": 12,
+  "hbond_donors": 0,
+  "hbond_acceptors": 2,
+  "tpsa": 26.3,
+  "logp": 1.8728,
+  "aromatic_rings": 1,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "309.15",
+  "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 3.318e-05
 }

@@ -1,10 +1,31 @@
 {
-  "lookup_id": "PFPUZMSQZJFLBK-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "PFPUZMSQZJFLBK-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C9H14N2O3/c1-7(2)8(12)14-6-5-11-4-3-10-9(11)13/h1,3-6H2,2H3,(H,10,13)",
   "smiles": "C=C(C)C(=O)OCCN1CCNC1=O",
-  "melting_temp": "N/A",
+  "mol_name": "2-(2-oxoimidazolidin-1-yl)ethyl methacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 4,
+  "molecular_weight": 198.100442308,
+  "heavy_atom_count": 14,
+  "hbond_donors": 1,
+  "hbond_acceptors": 3,
+  "tpsa": 58.64,
+  "logp": 0.13090000000000007,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "243.15",
+  "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.083241668
 }

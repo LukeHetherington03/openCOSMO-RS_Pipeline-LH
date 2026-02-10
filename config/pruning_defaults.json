@@ -1,0 +1,6 @@
+{
+  "energy_window": 5.0,
+  "rmsd_threshold": 0.5,
+  "keep_all": false,
+  "strict": false
+}

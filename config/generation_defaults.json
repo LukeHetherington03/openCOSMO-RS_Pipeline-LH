@@ -1,0 +1,6 @@
+{
+  "engine": "rdkit",
+  "n": 1,
+  "seed": 42,
+  "strict": false
+}

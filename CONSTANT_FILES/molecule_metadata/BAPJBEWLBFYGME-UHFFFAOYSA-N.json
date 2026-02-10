@@ -1,10 +1,31 @@
 {
-  "lookup_id": "BAPJBEWLBFYGME-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "BAPJBEWLBFYGME-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C4H6O2/c1-3-4(5)6-2/h3H,1H2,2H3",
   "smiles": "C=CC(=O)OC",
-  "melting_temp": 194.73,
-  "Hfus": 12.01,
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Tm and ΔfusH° estimated via Joback method."
+  "mol_name": "methyl_acrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 1,
+  "molecular_weight": 86.036779432,
+  "heavy_atom_count": 6,
+  "hbond_donors": 0,
+  "hbond_acceptors": 2,
+  "tpsa": 26.3,
+  "logp": 0.34539999999999993,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "198.15",
+  "melting_temp_source": "Chemical book",
+  "Hfus": "N/A",
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.010728848
 }

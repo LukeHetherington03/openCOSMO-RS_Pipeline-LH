@@ -1,0 +1,31 @@
+{
+  "metadata_version": 1,
+  "inchi_key": "VEBCLRKUSAGCDF-UHFFFAOYSA-N",
+  "smiles": "C=CC(=O)OCC1CC2CC1C1CCC(COC(=O)C=C)C21",
+  "mol_name": "(octahydro-4,7-methano-1H-indenediyl)bis(methylene) diacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 6,
+  "molecular_weight": 304.167459248,
+  "heavy_atom_count": 22,
+  "hbond_donors": 0,
+  "hbond_acceptors": 4,
+  "tpsa": 52.6,
+  "logp": 2.7432000000000007,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "<193.15",
+  "melting_temp_source": "SDS",
+  "Hfus": "N/A",
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 5.78298e-07
+}

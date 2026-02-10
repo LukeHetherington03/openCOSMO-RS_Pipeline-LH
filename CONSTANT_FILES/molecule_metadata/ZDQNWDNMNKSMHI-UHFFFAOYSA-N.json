@@ -1,0 +1,31 @@
+{
+  "metadata_version": 1,
+  "inchi_key": "ZDQNWDNMNKSMHI-UHFFFAOYSA-N",
+  "smiles": "C=CC(=O)OC(C)COCC(C)OCC(C)OC(=O)C=C",
+  "mol_name": "(1-methyl-1,2-ethanediyl)bis[oxy(methyl-2,1-ethanediyl)] diacrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 11,
+  "molecular_weight": 300.157288488,
+  "heavy_atom_count": 21,
+  "hbond_donors": 0,
+  "hbond_acceptors": 6,
+  "tpsa": 71.06,
+  "logp": 1.6434999999999997,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "N/A",
+  "melting_temp_source": "Chemical book",
+  "Hfus": "N/A",
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.000239643
+}

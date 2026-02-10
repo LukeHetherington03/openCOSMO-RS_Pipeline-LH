@@ -1,10 +1,31 @@
 {
-  "lookup_id": "OQCIXXVMXBXDSC-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "OQCIXXVMXBXDSC-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C17H18O2/c1-14(15-10-6-4-7-11-15)17(18-2,19-3)16-12-8-5-9-13-16/h4-13H,1H2,2-3H3",
   "smiles": "C=C(c1ccccc1)C(OC)(OC)c1ccccc1",
-  "melting_temp": "N/A",
+  "mol_name": "Irgacure651",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 5,
+  "molecular_weight": 254.130679816,
+  "heavy_atom_count": 19,
+  "hbond_donors": 0,
+  "hbond_acceptors": 2,
+  "tpsa": 18.46,
+  "logp": 3.845600000000003,
+  "aromatic_rings": 2,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "341.65",
+  "melting_temp_source": "https://doi.org/10.1021/acs.chemmater.4c00369",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 9.9167e-06
 }

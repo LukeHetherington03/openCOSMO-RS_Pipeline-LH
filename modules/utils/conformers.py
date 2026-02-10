@@ -3,7 +3,6 @@ from typing import List, Dict, Tuple, Optional
 
 from modules.utils.atomic_write import AtomicWriter
 
-
 class ConformerRecord:
     """
     Represents a single conformer with a stable schema used across
@@ -18,6 +17,7 @@ class ConformerRecord:
         energy: Optional[float],
         smiles: str,
         provenance: Optional[Dict] = None,
+        optimisation_history: Optional[List[Dict]] = None,
     ):
         self.inchi_key = inchi_key
         self.conf_num = int(conf_num)
@@ -25,7 +25,12 @@ class ConformerRecord:
         self.xyz_path = xyz_path
         self.energy = energy
         self.smiles = smiles
+
+        # Misc metadata
         self.provenance = provenance or {}
+
+        # Chronological list of optimisation steps
+        self.optimisation_history = optimisation_history or []
 
     # ------------------------------------------------------------
     # Serialisation helpers
@@ -39,6 +44,7 @@ class ConformerRecord:
             "energy": self.energy,
             "smiles": self.smiles,
             "provenance": self.provenance,
+            "optimisation_history": self.optimisation_history,
         }
 
     @classmethod
@@ -50,22 +56,8 @@ class ConformerRecord:
             energy=data.get("energy"),
             smiles=data.get("smiles", ""),
             provenance=data.get("provenance", {}),
+            optimisation_history=data.get("optimisation_history", []),
         )
-
-    # ------------------------------------------------------------
-    # Utility
-    # ------------------------------------------------------------
-    @staticmethod
-    def parse_lookup_id(lookup_id: str) -> Tuple[str, int]:
-        """
-        Reverse the composite lookup_id back into (inchi_key, conf_num).
-        Expects format: "{inchi_key}_conf{conf_num:03d}".
-        """
-        if "_conf" not in lookup_id:
-            raise ValueError(f"Invalid lookup_id format: {lookup_id}")
-        inchi_key, conf_part = lookup_id.rsplit("_conf", 1)
-        return inchi_key, int(conf_part)
-
 
 class ConformerSet:
     """

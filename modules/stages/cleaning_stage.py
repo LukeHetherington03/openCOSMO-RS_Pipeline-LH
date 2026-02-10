@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from rdkit import Chem
 from rdkit.Chem import inchi
+import hashlib
 
 from modules.stages.base_stage import BaseStage
 
@@ -16,14 +17,13 @@ STANDARD_NAMES = {
     "mol_id": "mol_id",
     "pubchem_sid": "pubchem_sid",
     "mol_name": "mol_name_iupac",
-    "name": "mol_name",  # original/AKA name
+    "name": "mol_name",
     "smiles": "smiles",
     "formula_calcd": "formula_calcd",
     "anionic": "anionic",
     "hfus": "Hfus",
     "gfus_mode": "Gfus_mode",
 }
-
 
 DEFAULT_METADATA = {
     "melting_temp": "N/A",
@@ -34,6 +34,7 @@ DEFAULT_METADATA = {
     "anionic": False,
     "mol_name": "N/A",
     "mol_name_iupac": "N/A",
+    "experimental_solubility_mol_frac": None
 }
 
 METADATA_VERSION = 1
@@ -43,36 +44,34 @@ class CleaningStage(BaseStage):
     """
     Cleans raw CSV files into a unified dataset and produces molecule metadata.
 
-    Behaviour:
-      - Accepts input_folder(s) OR input_csv(s)
-      - Collects all CSVs into a unified list
-      - Standardises column names
-      - Validates SMILES and generates InChIKey
-      - Canonicalises SMILES
-      - Produces:
-            clean_dataset.csv
-            molecule_metadata/<inchi_key>.json
+    Produces:
+        cleaned.csv
+        molecule_metadata/<inchi_key>.json
     """
 
-    # ------------------------------------------------------------
-    # Entry point
-    # ------------------------------------------------------------
     def execute(self):
-        self.log_header("Starting Cleaning Stage")
+        # Strict mode
+        self.strict_mode = self.strict("cleaning")
 
-        self.strict_mode = bool(self.config.get("cleaning", {}).get("strict", False))
+        # Declare canonical output
+        output_csv = self.set_stage_output("cleaned.csv")
+
+        metadata_dir = self.output_path("molecule_metadata")
+        os.makedirs(metadata_dir, exist_ok=True)
+
         self.warnings = {
             "missing_melting_temp": 0,
             "invalid_smiles": 0,
             "default_charge": 0,
         }
 
+        # Resolve input CSVs
         csv_list = self._resolve_input_sources()
-        output_csv = self.output_path("clean_dataset.csv")
-        metadata_dir = self.output_path("molecule_metadata")
-        os.makedirs(metadata_dir, exist_ok=True)
 
-        # We track items by source file stem, but do not expose lookup_id downstream
+        # NEW: merge and store raw input
+        self._write_combined_raw_input(csv_list)
+
+        # Track items by filename stem
         lookup_ids = [
             os.path.splitext(os.path.basename(p))[0]
             for p in csv_list
@@ -88,6 +87,7 @@ class CleaningStage(BaseStage):
                 continue
 
             df = self._standardise_headers(df, lookup_id)
+
             if not self._validate_required_fields(df, lookup_id):
                 self.update_progress(lookup_id, success=False)
                 continue
@@ -95,12 +95,12 @@ class CleaningStage(BaseStage):
             df = self._canonicalise_smiles(df, lookup_id)
             df = self._generate_inchikeys(df, lookup_id)
 
-            # Write per-molecule metadata (molecule-level, no lookup_id/conf_num)
             source_file = self._find_source_file(lookup_id, csv_list)
             self._write_metadata_for_frame(df, metadata_dir, source_file)
 
             df = self._reorder_columns(df)
             combined_rows.append(df)
+
             self.update_progress(lookup_id)
 
         if not combined_rows:
@@ -111,7 +111,6 @@ class CleaningStage(BaseStage):
 
         self._log_warning_summary()
         self.log(f"Clean dataset written to: {output_csv}")
-        self.job.mark_complete()
 
     # ------------------------------------------------------------
     # Resolve input sources
@@ -119,6 +118,7 @@ class CleaningStage(BaseStage):
     def _resolve_input_sources(self):
         csv_list = []
 
+        # input_folder(s)
         if "input_folder" in self.parameters:
             folders = [self.parameters["input_folder"]]
         elif "input_folders" in self.parameters:
@@ -136,14 +136,14 @@ class CleaningStage(BaseStage):
                 if fname.lower().endswith(".csv"):
                     csv_list.append(os.path.join(folder, fname))
 
+        # input_csv(s)
         if "input_csv" in self.parameters:
             raw = self.parameters["input_csv"]
             if isinstance(raw, str):
                 raw = [raw]
 
             for p in raw:
-                if not os.path.isfile(p):
-                    self.fail(f"input_csv file does not exist: {p}")
+                self.require_file(p, "input_csv")
                 csv_list.append(p)
 
         if not csv_list:
@@ -153,6 +153,32 @@ class CleaningStage(BaseStage):
         self.log(f"Resolved {len(csv_list)} CSV files for cleaning")
 
         return csv_list
+
+    def _write_combined_raw_input(self, csv_list):
+        """
+        Merge all input CSVs into a single raw_combined.csv file
+        stored under the job's inputs directory.
+        """
+        frames = []
+        for path in csv_list:
+            try:
+                df = pd.read_csv(path)
+                df["__source_file"] = os.path.abspath(path)
+                frames.append(df)
+            except Exception as e:
+                self.log(f"[WARNING] Failed to read {path}: {e}")
+
+        if not frames:
+            self.fail("No valid CSVs could be read for raw input merge.")
+
+        combined = pd.concat(frames, ignore_index=True)
+
+        # Write to job inputs directory
+        out_path = self.input_path("raw_combined.csv")
+        combined.to_csv(out_path, index=False)
+
+        self.log(f"Merged raw input written to: {out_path}")
+
 
     # ------------------------------------------------------------
     # Load CSV
@@ -261,31 +287,32 @@ class CleaningStage(BaseStage):
             return None
 
     def _generate_inchikeys(self, df, lookup_id):
-        df["key_inchi"] = df["smiles"].apply(self._smiles_to_inchikey)
+        df["inchi_key"] = df["smiles"].apply(self._smiles_to_inchikey)
 
-        invalid = df["key_inchi"].isna()
+        invalid = df["inchi_key"].isna()
         if invalid.any():
             bad = df.loc[invalid, "smiles"].tolist()
             self.log(f"[WARNING] Invalid SMILES in {lookup_id}: {bad}")
             self.warnings["invalid_smiles"] += len(bad)
 
         return df
-
+    
     # ------------------------------------------------------------
     # Metadata writing
     # ------------------------------------------------------------
     def _write_metadata_for_frame(self, df, metadata_dir, source_file):
-        """
-        For each unique InChIKey in the dataframe, write a molecule-level
-        metadata JSON file. Metadata is molecule-level, keyed by InChIKey.
-        No lookup_id or conf_num is stored here.
-        """
         from rdkit.Chem import Lipinski, rdMolDescriptors, Crippen
+        import hashlib
+
+        def _json_hash(obj):
+            """Stable hash of a JSON-serialisable object."""
+            data = json.dumps(obj, sort_keys=True).encode("utf-8")
+            return hashlib.sha256(data).hexdigest()
 
         pipeline_version = self.config.get("pipeline_version", "unknown")
         timestamp = datetime.utcnow().isoformat() + "Z"
 
-        for inchi_key, group in df.groupby("key_inchi"):
+        for inchi_key, group in df.groupby("inchi_key"):
             if not inchi_key:
                 continue
 
@@ -294,14 +321,12 @@ class CleaningStage(BaseStage):
             smiles = row.get("smiles", "")
             mol = Chem.MolFromSmiles(smiles)
 
-            # Basic fields
             charge_val = int(row.get("charge", 0))
             multiplicity = 1 if charge_val == 0 else 2
 
             mol_name = row.get("mol_name", DEFAULT_METADATA["mol_name"])
             mol_name_iupac = row.get("mol_name_iupac", DEFAULT_METADATA["mol_name_iupac"])
 
-            # --- NEW DESCRIPTORS ---
             if mol is not None:
                 rotatable_bonds = Lipinski.NumRotatableBonds(mol)
                 molecular_weight = rdMolDescriptors.CalcExactMolWt(mol)
@@ -312,7 +337,6 @@ class CleaningStage(BaseStage):
                 logp = Crippen.MolLogP(mol)
                 aromatic_rings = rdMolDescriptors.CalcNumAromaticRings(mol)
             else:
-                # Fallbacks if SMILES invalid
                 rotatable_bonds = None
                 molecular_weight = None
                 heavy_atom_count = None
@@ -322,6 +346,7 @@ class CleaningStage(BaseStage):
                 logp = None
                 aromatic_rings = None
 
+            # Base metadata block
             meta = {
                 "metadata_version": METADATA_VERSION,
                 "inchi_key": inchi_key,
@@ -331,7 +356,6 @@ class CleaningStage(BaseStage):
                 "charge": charge_val,
                 "multiplicity": multiplicity,
 
-                # --- NEW DESCRIPTORS ---
                 "rotatable_bonds": rotatable_bonds,
                 "molecular_weight": molecular_weight,
                 "heavy_atom_count": heavy_atom_count,
@@ -345,10 +369,12 @@ class CleaningStage(BaseStage):
                     "source_file": source_file,
                     "cleaning_timestamp": timestamp,
                     "pipeline_version": pipeline_version,
+                    "generated_by_request": self.job.request_id,
+                    "generated_by_job": self.job.job_id,
                 },
             }
 
-            # Add default metadata fields (melting point, etc.)
+            # Add optional metadata fields
             for key, default in DEFAULT_METADATA.items():
                 if key in ("mol_name", "mol_name_iupac"):
                     continue
@@ -364,16 +390,54 @@ class CleaningStage(BaseStage):
                 )
                 self.warnings["missing_melting_temp"] += 1
 
-            out_path = os.path.join(metadata_dir, f"{inchi_key}.json")
-            with open(out_path, "w") as f:
-                json.dump(meta, f, indent=2)
+            # Serialise once
+            meta_json = json.dumps(meta, indent=2)
+            meta_hash = _json_hash(meta)
+
+            # ------------------------------------------------------------
+            # 1. Write to job-local metadata directory (always)
+            # ------------------------------------------------------------
+            local_path = os.path.join(metadata_dir, f"{inchi_key}.json")
+            with open(local_path, "w") as f:
+                f.write(meta_json)
+
+            # ------------------------------------------------------------
+            # 2. Write to global metadata directory (only if changed)
+            # ------------------------------------------------------------
+            global_meta_dir = self.config.get("constant_files", {}).get("metadata_dir")
+
+            if not global_meta_dir:
+                self.log("[WARNING] No global metadata_dir defined in config; skipping global write.")
+                continue
+
+            os.makedirs(global_meta_dir, exist_ok=True)
+            global_path = os.path.join(global_meta_dir, f"{inchi_key}.json")
+
+            write_global = True
+
+            if os.path.exists(global_path):
+                try:
+                    with open(global_path) as f:
+                        existing = json.load(f)
+                    existing_hash = _json_hash(existing)
+                    if existing_hash == meta_hash:
+                        write_global = False
+                except Exception:
+                    write_global = True
+
+            if write_global:
+                with open(global_path, "w") as f:
+                    f.write(meta_json)
+                self.log(f"[INFO] Global metadata updated: {global_path}")
+            else:
+                self.log(f"[INFO] Global metadata unchanged: {global_path}")
 
 
     # ------------------------------------------------------------
     # Column ordering
     # ------------------------------------------------------------
     def _reorder_columns(self, df):
-        first = ["key_inchi", "smiles", "charge"]
+        first = ["inchi_key", "smiles", "charge"]
         if "mol_name" in df.columns:
             first.append("mol_name")
         if "mol_name_iupac" in df.columns:

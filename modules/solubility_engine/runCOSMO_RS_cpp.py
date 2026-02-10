@@ -34,10 +34,21 @@ calculated fractions of conformers and target mol fraction of component
 
 """
 
+
+
 import numpy as np
+import sys
+import inspect
+
+import sys
+import inspect
+from pathlib import Path
+
+# Import modules
 from opencosmorspy import Parameterization, COSMORS
 from opencosmorspy.parameterization import openCOSMORS24a
 import openCOSMORS
+
 import math
 import mpmath
 import statistics as stat
@@ -55,7 +66,6 @@ options = {
                                                                     # you still need to catch the error and handle it approprietlywhether to skip COSMOSPACE errors in the case a parameter makes the equations unsolvable
     # input switches
     'sw_SR_COSMOfiles_type': 'ORCA_COSMO_TZVPD',                # ['Turbomole_COSMO_TZVP', 'Turbomole_COSMO_TZVPD_FINE', 'ORCA_COSMO_TZVPD']
-    'sw_SR_polarizabilities': 1,            # Will this turn reading polarisabilities on and escape the error??
     'sw_SR_combTerm': 1, # 0 No combinatorial term
                          # 1 to use the combinatorial term by Staverman-Guggenheim
                          # 2 to use the combinatorial term by Klamt (2003)
@@ -76,31 +86,29 @@ options = {
     
                                                                   
     # segment descriptor switches
-    'sw_SR_atomicNumber': 0,                                        # [0, 1] : differentiate between atomic numbers
+    'sw_SR_atomicNumber': 1,                                        # [0, 1] : differentiate between atomic numbers
     'sw_SR_misfit': 2,                                              # [0, 1, 2]
                                                                     #       0: do not use misfit correlation
                                                                     #       1 : use misfit correlation on all molecules
                                                                     #       2 : use misfit correlation only on neutral molecules
     'sw_SR_differentiateHydrogens' : 0,                             # [0, 1] : differentiate between hydrogen atoms depending on the heteroatom they are bound to
-    'sw_SR_differentiateMoleculeGroups' : 0,                        # [0, 1] : differentiate between molecule groups
+    'sw_SR_differentiateMoleculeGroups' : 0,  
+    'sw_SR_polarizabilities' : 7                      # [0,1,3,5,6,7,8] : polarizability projections modes. Parametrizations and notations are from https://doi.org/10.1016/j.ces.2025.122170. 1 - Eq.(16)+𝑤1(Eq.(9)), 6 - Eq.(16)+𝑤5(Eq.(11)), 7 - Eq.(24)+𝑤5(Eq.(11)), 8 - Eq.(25)+𝑤5(Eq.(11)).  
 
 }
 
-
-
-
-# parameters are the latest parameterization with polarizability projections: Eq.(24)+w5(Eq(11))) from https://doi.org/10.1016/j.ces.2025.122170.
-parameters = {
+# parameters (parameters below are the latest parametrization with polarizability projections: Eq.(24)+𝑤5(Eq.(11))) from https://doi.org/10.1016/j.ces.2025.122170. 
+parameters = {  
     'Aeff': 4.90825,
-    'alpha': 7322000.0,
-    'CHB': 43421000.0,
+    'alpha': 7876000.0,
+    'CHB': 49318000.0,
     'CHBT': 1.5,
     'SigmaHB': 0.009953,
     'Rav': 0.5,
     'RavCorr': 1,
     'fCorr': 2.4,
     'comb_SG_z_coord': 0.0,
-    'comb_SG_A_std': 0.0,
+    'comb_SG_A_std': 1.0,
     'comb_modSG_exp': 2.0/3.0,
     'comb_lambda0': 0.463,
     'comb_lambda1': 0.42,
@@ -117,31 +125,27 @@ parameters = {
 
 
 def fill_missing_calculation_structures(calculations, options):
-    """
-    Function to fill missing fields for COSMO-RS calculations
-    """
+
     for i, calculation in enumerate(calculations):
 
         number_of_components = calculation['concentrations'].shape[1]
         number_of_concentrations = calculation['concentrations'].shape[0]
 
-        calculation['ln_gamma_x_SR_combinatorial_calc'] = np.zeros((number_of_concentrations, number_of_components),dtype= np.float32)
-        calculation['ln_gamma_x_SR_residual_calc'] = np.zeros((number_of_concentrations, number_of_components), dtype=np.float32)
-        calculation['ln_gamma_x_SR_calc'] = np.zeros((number_of_concentrations, number_of_components), dtype=np.float32)
+        calculation['ln_gamma_x_SR_combinatorial_calc'] = np.zeros((number_of_concentrations, number_of_components))
+        calculation['ln_gamma_x_SR_residual_calc'] = np.zeros((number_of_concentrations, number_of_components))
+        calculation['ln_gamma_x_SR_calc'] = np.zeros((number_of_concentrations, number_of_components))
         calculation['index'] = i
 
         if options['sw_SR_calculateContactStatisticsAndAdditionalProperties'] > 0:
             # one for Aij + number of  partial interaction matrices
             number_of_interaction_matrices = 1 + len(options['sw_SR_partialInteractionMatrices'])
             
-            calculation['contact_statistics'] = np.zeros((number_of_concentrations, number_of_components, number_of_components), dtype=np.float32)
-            calculation['average_surface_energies'] = np.zeros((number_of_concentrations, number_of_interaction_matrices, number_of_components, number_of_components), dtype=np.float32)
+            calculation['contact_statistics'] = np.zeros((number_of_concentrations, number_of_components, number_of_components))
+            calculation['average_surface_energies'] = np.zeros((number_of_concentrations, number_of_interaction_matrices, number_of_components, number_of_components))
 
             if options['sw_SR_calculateContactStatisticsAndAdditionalProperties'] == 2:
-                calculation['partial_molar_energies'] = np.zeros((number_of_concentrations, number_of_interaction_matrices, number_of_components), dtype=np.float32)
+                calculation['partial_molar_energies'] = np.zeros((number_of_concentrations, number_of_interaction_matrices, number_of_components))
     return calculations
-
-
 
 # Read input file containing a list of the molecules and information about their conformers
 with open('mixture_inputs.txt','r') as f:
@@ -368,7 +372,7 @@ def conf_calcs(molecules,confs_of,mults,mol_frac,T):
         prev_mus = mus[:]    
         
         for i in range(len(mus)):
-            mus[i] = float(calculations[0]['ln_gamma_x_SR_calc'].tolist()[0][i])*R*T   # New total chemical potentials of components read from COSMO results (in kJ/mol)
+            mus[i] = float(calculations[0]['ln_gamma_x_SR_calc'].tolist()[0][i])*R*T   # New total chemical potentials of components read from COSMO results (in kJ/mol) 
             mus_diff[i] = abs(mus[i] - prev_mus[i])     # Difference between current and previous mu - this needs to converge in iteration
     
         mus_diff_mean = stat.mean(mus_diff)
@@ -452,7 +456,7 @@ def run_saturation(x,refstate,molfrac_diff,new_molfrac_partition,molfrac_tosat):
         for i in range(len(confs_of)):
             if confs_of[i] == mol_to_sat:
                 tosat_inds.append(i)
-                tosat_lngams.append(calculations[0]['ln_gamma_x_SR_calc'][0][i])
+                tosat_lngams.append(calculations[0]['ln_gamma_x_SR_calc'][0][i])       
                 tosat_molweights.append(new_molweights_mix[i])
                 tosat_enqms.append(en_tots[i])
         mu_partition = confpartfun(tosat_lngams, tosat_enqms)
@@ -625,7 +629,7 @@ if sat == 'no':
             component_entots = []
             for k in range(len(confs_of)):
                 if confs_of[k] == j:
-                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])
+                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])    
                     component_entots.append(en_tots[k])
             partition_mu_conformerrefsts = confpartfun(component_gammatots,component_entots)
             partition_lngam_conformerrefsts = partition_mu_conformerrefsts/(R*T)
@@ -687,7 +691,7 @@ if sat == 'no':
                 component_entots = []
                 for k in range(len(confs_of)):
                     if confs_of[k] == j:
-                        component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])
+                        component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])    
                         component_entots.append(en_tots[k])
                 partition_mu_mixconformerrefsts = confpartfun(component_gammatots,component_entots)
                 partition_lngam_mixconformerrefsts = partition_mu_mixconformerrefsts/(R*T)
@@ -757,7 +761,7 @@ else:
             component_entots = []
             for k in range(len(confs_of)):
                 if confs_of[k] == j:
-                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])
+                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][k])    
                     component_entots.append(en_tots[k])
             partition_mu_conformerrefsts = confpartfun(component_gammatots,component_entots)
             partition_lngam_conformerrefsts = partition_mu_conformerrefsts/(R*T)
@@ -801,7 +805,7 @@ else:
             component_entots = []
             for j in range(len(confs_of)):
                 if confs_of[j] == i:
-                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][j])
+                    component_gammatots.append(calculations[0]['ln_gamma_x_SR_calc'][0][j])   
                     component_entots.append(en_tots[j])
             partition_mu_mixconformerrefsts = confpartfun(component_gammatots,component_entots)
             partition_lngam_mixconformerrefsts = partition_mu_mixconformerrefsts/(R*T)
@@ -816,3 +820,5 @@ else:
 
 end = datetime.datetime.now()
 print('time taken is ',end-start)
+
+

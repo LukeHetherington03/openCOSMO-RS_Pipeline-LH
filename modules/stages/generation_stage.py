@@ -21,47 +21,46 @@ class GenerationStage(BaseStage):
     """
     Conformer generation stage.
 
-    Responsibilities:
-      - Load cleaned dataset (clean_dataset.csv from CleaningStage)
-      - Validate and canonicalise SMILES
-      - Generate conformers using selected backend
-      - Write:
-          - xyz/ files
-          - summary.csv (conformer-level)
-          - energies.json (flat list of conformer records)
-          - job_state.json
+    Input:
+        stage_input = cleaned.csv from CleaningStage
+
+    Output:
+        energies.json  (canonical stage output)
+        summary.csv
+        xyz/ directory
     """
 
     # ------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------
     def execute(self):
-        self.log_header("Starting Generation Stage")
+        # Strict mode
+        self.strict_mode = self.strict("generation")
 
-        cfg = self.config or {}
-        self.strict_mode = bool(cfg.get("generation", {}).get("strict", False))
+        # Declare canonical output file
+        self.set_stage_output("energies.json")
+
+        # Retrieve stage input
+        stage_input = self.get_stage_input()
+        self.require_file(stage_input, "cleaned dataset")
 
         params = self.parameters
-
-        summary_file = params.get("summary_file")
-        if summary_file is None:
-            summary_file = self._auto_detect_clean_dataset()
-
-        if not os.path.isfile(summary_file):
-            self.fail(f"GenerationStage: summary_file does not exist: {summary_file}")
-
         num_confs = params.get("num_confs", 5)
         seed = params.get("seed", 42)
         backend = params.get("engine", "rdkit").lower()
 
         self.log(f"Backend: {backend}")
-        self.log(f"Input summary file: {summary_file}")
+        self.log(f"Stage input: {stage_input}")
         self.log(f"Conformers per molecule: {num_confs}")
         self.log(f"Strict mode: {self.strict_mode}")
 
+        # Prepare directories
         dirs = self._prepare_directories()
-        df_all = self._load_csv(summary_file)
 
+        # Load cleaned dataset
+        df_all = self._load_csv(stage_input)
+
+        # Validate rows
         valid_rows = self._validate_rows(df_all)
         self.set_items([row_idx for row_idx, *_ in valid_rows])
 
@@ -71,6 +70,7 @@ class GenerationStage(BaseStage):
             "zero_conformers": 0,
         }
 
+        # Run backend
         conformer_set = self._dispatch_backend(
             backend=backend,
             valid_rows=valid_rows,
@@ -82,6 +82,7 @@ class GenerationStage(BaseStage):
         if len(conformer_set) == 0:
             self.fail("Generation produced zero conformers.")
 
+        # Write outputs
         self._write_outputs(
             conformer_set=conformer_set,
             dirs=dirs,
@@ -93,26 +94,10 @@ class GenerationStage(BaseStage):
         )
 
         self._log_warning_summary()
-        self.log_header("Generation Stage Complete")
-        self.job.mark_complete()
 
     # ------------------------------------------------------------
     # Helpers: Input handling
     # ------------------------------------------------------------
-    def _auto_detect_clean_dataset(self) -> str:
-        candidates = [
-            os.path.join(self.inputs_dir, "clean_dataset.csv"),
-            os.path.join(self.outputs_dir, "clean_dataset.csv"),
-        ]
-        for path in candidates:
-            if os.path.isfile(path):
-                self.log(f"Auto-detected clean_dataset.csv at: {path}")
-                return path
-        self.fail(
-            "GenerationStage: summary_file not provided and clean_dataset.csv "
-            "could not be auto-detected."
-        )
-
     def _prepare_directories(self):
         dirs = {
             "inputs": self.inputs_dir,
@@ -127,7 +112,7 @@ class GenerationStage(BaseStage):
         try:
             df = pd.read_csv(path)
         except Exception as e:
-            self.fail(f"Failed to load summary_file {path}: {e}")
+            self.fail(f"Failed to load stage_input {path}: {e}")
         self.log(f"Loaded {len(df)} rows from {path}")
         return df
 
@@ -168,7 +153,7 @@ class GenerationStage(BaseStage):
                 continue
 
             smiles_canon = Chem.MolToSmiles(mol, canonical=True)
-            row["smiles"] = smiles_canon
+            df.at[idx, "smiles"] = smiles_canon
 
             valid.append((idx, inchi_key, smiles_canon, row))
 
@@ -179,7 +164,6 @@ class GenerationStage(BaseStage):
     # Backend dispatch
     # ------------------------------------------------------------
     def _dispatch_backend(self, backend, valid_rows, num_confs, seed, xyz_out_dir):
-
         if backend not in GENERATION_BACKENDS:
             self.fail(f"Unknown backend: {backend}")
 
@@ -267,6 +251,15 @@ class GenerationStage(BaseStage):
                     },
                 )
 
+                # 0th optimisation entry (generation-level geometry + energy)
+                record.optimisation_history.append({
+                    "stage": "generation",
+                    "engine": "rdkit",
+                    "energy": energy,
+                    "xyz_path": xyz_path,
+                    "timestamp": timestamp,
+                })
+
                 self._write_xyz(mol, conf_id, xyz_path)
                 conformer_set.add(record)
 
@@ -292,13 +285,13 @@ class GenerationStage(BaseStage):
         with AtomicWriter(summary_path) as f:
             pd.DataFrame(conformer_set.to_list()).to_csv(f, index=False)
 
-        # energies.json
-        energies_path = os.path.join(dirs["outputs"], "energies.json")
+        # energies.json (canonical output)
+        energies_path = self.get_stage_output()
         conformer_set.save(energies_path)
 
-        # job_state.json
-        job_state_path = os.path.join(self.job.job_dir, "job_state.json")
-        with AtomicWriter(job_state_path) as f:
+        # Optional: lightweight metadata file (not job_state.json)
+        meta_path = os.path.join(self.outputs_dir, "generation_metadata.json")
+        with AtomicWriter(meta_path) as f:
             json.dump(
                 {
                     "stage": "generation",

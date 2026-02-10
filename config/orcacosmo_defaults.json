@@ -1,0 +1,5 @@
+{
+  "strict": false,
+  "enable_tzvp_fallback": true,
+  "maxcore": 2000
+}

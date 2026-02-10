@@ -1,0 +1,31 @@
+{
+  "metadata_version": 1,
+  "inchi_key": "GWZMWHWAWHPNHN-UHFFFAOYSA-N",
+  "smiles": "C=CC(=O)OCC(C)O",
+  "mol_name": "2-hydroxypropyl acrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 3,
+  "molecular_weight": 130.06299418,
+  "heavy_atom_count": 9,
+  "hbond_donors": 1,
+  "hbond_acceptors": 3,
+  "tpsa": 46.53,
+  "logp": 0.09639999999999987,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv",
+    "cleaning_timestamp": "2026-02-10T19:28:59.095529Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-10Feb26-1928-58795-full_run",
+    "generated_by_job": "J-10Feb26-1928-58797-cleaning"
+  },
+  "melting_temp": 350.15,
+  "melting_temp_source": "Chemical book",
+  "Hfus": "N/A",
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.12150079896804
+}

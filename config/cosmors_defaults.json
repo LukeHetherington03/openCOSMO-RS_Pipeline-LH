@@ -1,0 +1,40 @@
+{
+  "options": {
+    "sw_skip_COSMOSPACE_errors": 0,
+    "sw_SR_COSMOfiles_type": "ORCA_COSMO_TZVPD",
+    "sw_SR_combTerm": 1,
+    "sw_SR_alwaysReloadSigmaProfiles": 0,
+    "sw_SR_alwaysCalculateSizeRelatedParameters": 1,
+    "sw_SR_useSegmentReferenceStateForInteractionMatrix": 0,
+    "sw_SR_calculateContactStatisticsAndAdditionalProperties": 2,
+    "sw_SR_partialInteractionMatrices": [],
+    "sw_SR_atomicNumber": 1,
+    "sw_SR_misfit": 2,
+    "sw_SR_differentiateHydrogens": 0,
+    "sw_SR_differentiateMoleculeGroups": 0,
+    "sw_SR_polarizabilities": 7
+  },
+
+  "parameters": {
+    "Aeff": 4.90825,
+    "alpha": 7876000.0,
+    "CHB": 49318000.0,
+    "CHBT": 1.5,
+    "SigmaHB": 0.009953,
+    "Rav": 0.5,
+    "RavCorr": 1,
+    "fCorr": 2.4,
+    "comb_SG_z_coord": 0.0,
+    "comb_SG_A_std": 1.0,
+    "comb_modSG_exp": 0.6666666667,
+    "comb_lambda0": 0.463,
+    "comb_lambda1": 0.42,
+    "comb_lambda2": 0.065,
+    "comb_SGG_lambda": 0.773,
+    "comb_SGG_beta": 0.778,
+    "m_vdW": 29.567,
+    "E_F_corr": 346.82,
+    "radii": {},
+    "exp": {}
+  }
+}

@@ -1,16 +1,20 @@
 {
+  "_comment": "Configuration for COSMO-RS solubility calculations",
+
+  "default_solvent": "water",
+  "default_temperature": 298.15,
   "calculation_type": "all",
-  "temperature": 298.15,
+
+  "initial_solute_x": 1e-4,
 
   "saturation": {
     "enabled": true,
     "Gfus_mode": "MyrdalYalkowsky",
     "Hfus": "N/A",
-    "SORcf": 1
+    "SORcf": 1.0
   },
 
-  "mixture": {
-    "default_multiplicity": 1,
-    "force_absolute_paths": true
-  }
+  "parallel": true,
+  "n_workers": 4,
+  "strict": false
 }

@@ -1,10 +1,31 @@
 {
-  "lookup_id": "DPBJAVGHACCNRL-UHFFFAOYSA-N",
+  "metadata_version": 1,
   "inchi_key": "DPBJAVGHACCNRL-UHFFFAOYSA-N",
-  "inchi": "InChI=1S/C7H13NO2/c1-4-7(9)10-6-5-8(2)3/h4H,1,5-6H2,2-3H3",
   "smiles": "C=CC(=O)OCCN(C)C",
-  "melting_temp": "N/A",
+  "mol_name": "2-(dimethylamino)ethyl acrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 4,
+  "molecular_weight": 143.094628656,
+  "heavy_atom_count": 10,
+  "hbond_donors": 0,
+  "hbond_acceptors": 3,
+  "tpsa": 29.54,
+  "logp": 0.2771999999999999,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "213.15",
+  "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
-  "Gfus_model": "MyrdalYalkowsky",
-  "notes": "Fill in melting point, Hfus, and Gfus model if known."
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 0.02928467
 }

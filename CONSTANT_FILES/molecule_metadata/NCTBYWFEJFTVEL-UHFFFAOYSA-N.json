@@ -1,0 +1,31 @@
+{
+  "metadata_version": 1,
+  "inchi_key": "NCTBYWFEJFTVEL-UHFFFAOYSA-N",
+  "smiles": "C=CC(=O)OCC(C)CC",
+  "mol_name": "2-methylbutyl acrylate",
+  "mol_name_iupac": "N/A",
+  "charge": 0,
+  "multiplicity": 1,
+  "rotatable_bonds": 4,
+  "molecular_weight": 142.099379688,
+  "heavy_atom_count": 10,
+  "hbond_donors": 0,
+  "hbond_acceptors": 2,
+  "tpsa": 26.3,
+  "logp": 1.7616999999999998,
+  "aromatic_rings": 0,
+  "provenance": {
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
+    "cleaning_timestamp": "2026-02-08T14:49:51.462574Z",
+    "pipeline_version": "unknown",
+    "generated_by_request": "R-08Feb26-1449-51158-gen_metadata",
+    "generated_by_job": "J-08Feb26-1449-51159-cleaning"
+  },
+  "melting_temp": "207.63",
+  "melting_temp_source": "Chemical book",
+  "Hfus": "N/A",
+  "Gfus_mode": "MyrdalYalkowsky",
+  "formula_calcd": "",
+  "anionic": false,
+  "experimental_solubility_mol_frac": 3.99958e-05
+}

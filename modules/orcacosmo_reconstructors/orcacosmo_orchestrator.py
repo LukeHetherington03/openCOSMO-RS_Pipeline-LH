@@ -66,10 +66,6 @@ class OrcaCosmoOrchestrator:
         m = self.meta
         return (
             f"{m['lookup_id']} : DFT_CPCM_BP86_{m['method_used']}\n"
-            f"# ORCA input: {m['orca_input_path']}\n"
-            f"# CPCM radii source: {m['cpcm_radii_source']}\n"
-            f"# fallback_triggered: {m['fallback_triggered']}\n"
-            f"# smiles: {m['smiles']}\n"
         )
 
     # ------------------------------------------------------------
