@@ -3,13 +3,12 @@
 """
 run_visualisations.py
 
-Self-contained script for generating post-analysis visualisations
-for the openCOSMO-RS pipeline.
+Generates visualisations for multiple optimisation pipelines:
+- gXTB only
+- gXTB → ORCA (DFT)
+- ORCA only
 
-Edit the INPUTS section at the bottom to point to your energies.json,
-metadata directory, and output directory.
-
-This version is SSH-safe: it saves PNGs instead of showing plots.
+SSH-safe: saves PNGs instead of showing plots.
 Elapsed time is converted from seconds → hours.
 """
 
@@ -40,16 +39,17 @@ def load_metadata(metadata_dir: str) -> Dict[str, dict]:
 
 
 # ------------------------------------------------------------
-# Energies → (rotatable_bonds, elapsed_hours) extractor
+# Extract times for gXTB, ORCA, and combined
 # ------------------------------------------------------------
 
-def extract_gxtb_records(
+def extract_times(
     energies: List[dict],
     metadata: Dict[str, dict]
-) -> List[Tuple[int, float]]:
+) -> List[Tuple[int, float, float, float]]:
     """
-    Extract (rotatable_bonds, elapsed_hours) pairs for each conformer
-    that has a gXTB optimisation stage.
+    Returns a list of tuples:
+    (rotatable_bonds, gxtb_hours, orca_hours, combined_hours)
+    Missing stages are recorded as 0 hours.
     """
     records = []
 
@@ -63,38 +63,40 @@ def extract_gxtb_records(
         if rot_bonds is None:
             continue
 
-        gxtb_stage = next(
-            (s for s in entry.get("optimisation_history", [])
-             if s.get("engine") == "gxtb"),
-            None
-        )
-        if not gxtb_stage:
-            continue
+        gxtb_seconds = 0.0
+        orca_seconds = 0.0
 
-        elapsed_seconds = gxtb_stage.get("elapsed_seconds")
-        if elapsed_seconds is None:
-            continue
+        for stage in entry.get("optimisation_history", []):
+            engine = stage.get("engine")
 
-        elapsed_hours = elapsed_seconds / 3600.0
+            if engine == "gxtb":
+                gxtb_seconds = stage.get("elapsed_seconds", 0.0)
 
-        records.append((rot_bonds, elapsed_hours))
+            if engine == "orca":
+                orca_seconds = stage.get("elapsed_seconds", 0.0)
+
+        gxtb_hours = gxtb_seconds / 3600.0
+        orca_hours = orca_seconds / 3600.0
+        combined_hours = gxtb_hours + orca_hours
+
+        records.append((rot_bonds, gxtb_hours, orca_hours, combined_hours))
 
     return records
 
 
 # ------------------------------------------------------------
-# Plotting function (SSH-safe)
+# Plotting function
 # ------------------------------------------------------------
 
-def plot_gxtb_time_vs_rotatable_bonds(
-    energies_path: str,
+def plot_multi_pipeline_times(
+    energies_paths: Dict[str, str],
     metadata_dir: str,
-    output_dir: str,
-    aggregate: bool = True
+    output_dir: str
 ):
     """
-    Generate a PNG plot of gXTB optimisation time (hours) vs rotatable bonds.
-    Saves the figure to output_dir.
+    energies_paths: dict with keys:
+        "gxtb", "gxtb_dft", "dft"
+        each value is a path to an energies.json file
     """
 
     output_path = pathlib.Path(output_dir)
@@ -102,43 +104,69 @@ def plot_gxtb_time_vs_rotatable_bonds(
 
     metadata = load_metadata(metadata_dir)
 
-    with open(energies_path) as f:
-        energies = json.load(f)
+    # Storage for plotting
+    pipeline_data = {}
 
-    records = extract_gxtb_records(energies, metadata)
-    if not records:
-        raise ValueError("No gXTB optimisation records found.")
+    for label, path in energies_paths.items():
+        with open(path) as f:
+            energies = json.load(f)
 
-    rot, hours = zip(*records)
+        records = extract_times(energies, metadata)
+        if not records:
+            raise ValueError(f"No optimisation records found for {label}")
 
-    plt.figure(figsize=(9, 6))
-    plt.scatter(rot, hours, alpha=0.6, label="Conformers")
+        pipeline_data[label] = records
 
-    if aggregate:
+    # Plot
+    plt.figure(figsize=(10, 7))
+
+    colours = {
+        "gxtb": "blue",
+        "gxtb_dft": "green",
+        "dft": "red"
+    }
+
+    labels = {
+        "gxtb": "gXTB only",
+        "gxtb_dft": "gXTB → ORCA",
+        "dft": "ORCA only"
+    }
+
+    for key, records in pipeline_data.items():
+        rot = [r[0] for r in records]
+
+        if key == "gxtb":
+            y = [r[1] for r in records]  # gxtb_hours
+        elif key == "dft":
+            y = [r[2] for r in records]  # orca_hours
+        else:
+            y = [r[3] for r in records]  # combined_hours
+
+        # Aggregate mean per rotatable bond count
         groups = defaultdict(list)
-        for rb, h in records:
-            groups[rb].append(h)
+        for rb, val in zip(rot, y):
+            groups[rb].append(val)
 
         sorted_rb = sorted(groups.keys())
-        mean_hours = [sum(groups[rb]) / len(groups[rb]) for rb in sorted_rb]
+        mean_vals = [sum(groups[rb]) / len(groups[rb]) for rb in sorted_rb]
 
         plt.plot(
             sorted_rb,
-            mean_hours,
+            mean_vals,
             marker="o",
-            color="red",
             linewidth=2,
-            label="Mean per rotatable bond count"
+            color=colours[key],
+            label=labels[key]
         )
 
     plt.xlabel("Rotatable Bonds")
-    plt.ylabel("gXTB Elapsed Time (hours)")
-    plt.title("gXTB Optimisation Time vs Rotatable Bonds")
+    plt.ylabel("Elapsed Time (hours)")
+    plt.title("Optimisation Time vs Rotatable Bonds (gXTB, ORCA, Combined)")
     plt.grid(alpha=0.3)
     plt.legend()
     plt.tight_layout()
 
-    out_file = output_path / "gxtb_time_vs_rotatable_bonds_hours.png"
+    out_file = output_path / "multi_pipeline_times.png"
     plt.savefig(out_file, dpi=300)
     plt.close()
 
@@ -150,13 +178,17 @@ def plot_gxtb_time_vs_rotatable_bonds(
 # ------------------------------------------------------------
 
 if __name__ == "__main__":
-    ENERGIES_PATH = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/post_analysis_results/inputs/energies.json"
+    ENERGIES = {
+        "gxtb": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/post_analysis_results/inputs/energies_gxtb.json",
+        "gxtb_dft": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/post_analysis_results/inputs/energies_gxtb_dft.json",
+        "dft": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/post_analysis_results/inputs/energies_dft.json"
+    }
+
     METADATA_DIR = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/molecule_metadata"
     OUTPUT_DIR = "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/post_analysis_results/visualisations"
 
-    plot_gxtb_time_vs_rotatable_bonds(
-        energies_path=ENERGIES_PATH,
+    plot_multi_pipeline_times(
+        energies_paths=ENERGIES,
         metadata_dir=METADATA_DIR,
-        output_dir=OUTPUT_DIR,
-        aggregate=True
+        output_dir=OUTPUT_DIR
     )

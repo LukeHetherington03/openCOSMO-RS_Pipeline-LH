@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from rdkit import Chem
 from rdkit.Chem import inchi
+from rdkit.Chem import Descriptors
 import hashlib
 
 from modules.stages.base_stage import BaseStage
@@ -297,27 +298,71 @@ class CleaningStage(BaseStage):
 
         return df
     
-    # ------------------------------------------------------------
-    # Metadata writing
-    # ------------------------------------------------------------
     def _write_metadata_for_frame(self, df, metadata_dir, source_file):
-        from rdkit.Chem import Lipinski, rdMolDescriptors, Crippen
+        from rdkit.Chem import (
+            Lipinski, rdMolDescriptors, Crippen, Descriptors, rdmolops
+        )
         import hashlib
 
+        # ------------------------------------------------------------
+        # Functional group SMARTS patterns
+        # ------------------------------------------------------------
+        FG_SMARTS = {
+            # Existing groups
+            "is_amide": "[NX3][CX3](=[OX1])[#6]",
+            "is_ester": "[CX3](=O)[OX2H0][#6]",
+            "is_alcohol": "[OX2H][CX4]",
+            "is_amine": "[NX3;H2,H1,H0;!$(NC=O)]",
+            "is_carboxylic_acid": "C(=O)[OH]",
+            "is_ketone": "[CX3](=O)[#6]",
+            "is_aldehyde": "[CX3H1](=O)[#6]",
+            "is_nitrile": "C#N",
+
+            # Polymer-relevant groups
+            "is_acrylate": "C=CC(=O)O[*]",
+            "is_methacrylate": "C=C(C)C(=O)O[*]",
+            "is_acrylamide": "C=CC(=O)N[*]",
+            "is_methacrylamide": "C=C(C)C(=O)N[*]",
+            "is_vinyl_ether": "C=CO[*]",
+            "is_vinyl_ester": "C=COC(=O)[*]",
+            "is_styrenic": "c1ccccc1C=C[*]",
+
+            # Polar polymer groups
+            "is_ether": "[#6]-O-[#6]",
+            "is_carbonate": "O=C(O)O",
+            "is_urethane": "O=C(N)O",
+            "is_urea": "N-C(=O)-N",
+            "is_sulfonamide": "S(=O)(=O)N",
+            "is_sulfonate": "S(=O)(=O)O",
+            "is_phosphate": "P(=O)(O)(O)",
+
+            # Halogen flags
+            "is_fluorinated": "[F]",
+            "is_chlorinated": "[Cl]",
+            "is_brominated": "[Br]",
+        }
+
+        FG_PATTERNS = {k: Chem.MolFromSmarts(v) for k, v in FG_SMARTS.items()}
+
+        # ------------------------------------------------------------
+        # Hash helper
+        # ------------------------------------------------------------
         def _json_hash(obj):
-            """Stable hash of a JSON-serialisable object."""
             data = json.dumps(obj, sort_keys=True).encode("utf-8")
             return hashlib.sha256(data).hexdigest()
 
         pipeline_version = self.config.get("pipeline_version", "unknown")
         timestamp = datetime.utcnow().isoformat() + "Z"
+        overwrite = self.parameters.get("overwrite_metadata", False)
 
+        # ------------------------------------------------------------
+        # Process each molecule
+        # ------------------------------------------------------------
         for inchi_key, group in df.groupby("inchi_key"):
             if not inchi_key:
                 continue
 
             row = group.iloc[0]
-
             smiles = row.get("smiles", "")
             mol = Chem.MolFromSmiles(smiles)
 
@@ -327,6 +372,9 @@ class CleaningStage(BaseStage):
             mol_name = row.get("mol_name", DEFAULT_METADATA["mol_name"])
             mol_name_iupac = row.get("mol_name_iupac", DEFAULT_METADATA["mol_name_iupac"])
 
+            # ------------------------------------------------------------
+            # Physchem descriptors
+            # ------------------------------------------------------------
             if mol is not None:
                 rotatable_bonds = Lipinski.NumRotatableBonds(mol)
                 molecular_weight = rdMolDescriptors.CalcExactMolWt(mol)
@@ -336,19 +384,59 @@ class CleaningStage(BaseStage):
                 tpsa = rdMolDescriptors.CalcTPSA(mol)
                 logp = Crippen.MolLogP(mol)
                 aromatic_rings = rdMolDescriptors.CalcNumAromaticRings(mol)
-            else:
-                rotatable_bonds = None
-                molecular_weight = None
-                heavy_atom_count = None
-                hbond_donors = None
-                hbond_acceptors = None
-                tpsa = None
-                logp = None
-                aromatic_rings = None
 
-            # Base metadata block
+                # ------------------------------------------------------------
+                # Structural counts
+                # ------------------------------------------------------------
+                N_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "N")
+                O_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "O")
+                S_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "S")
+                halogen_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() in ["F", "Cl", "Br", "I"])
+
+                ring_count = mol.GetRingInfo().NumRings()
+                heterocycle_count = sum(
+                    1 for ring in mol.GetRingInfo().AtomRings()
+                    if any(mol.GetAtomWithIdx(i).GetAtomicNum() not in (6, 1) for i in ring)
+                )
+
+                double_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "DOUBLE")
+                triple_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "TRIPLE")
+
+                # ------------------------------------------------------------
+                # Functional group flags & counts
+                # ------------------------------------------------------------
+                fg_flags = {}
+                fg_counts = {}
+
+                for name, patt in FG_PATTERNS.items():
+                    matches = mol.GetSubstructMatches(patt)
+                    fg_flags[name] = len(matches) > 0
+                    fg_counts[name.replace("is_", "") + "_count"] = len(matches)
+
+                # ------------------------------------------------------------
+                # Global shape descriptors
+                # ------------------------------------------------------------
+                Fsp3 = rdMolDescriptors.CalcFractionCSP3(mol)
+                Bertz = Descriptors.BertzCT(mol)
+                molar_refractivity = Crippen.MolMR(mol)
+
+            else:
+                # All None if SMILES invalid
+                rotatable_bonds = molecular_weight = heavy_atom_count = None
+                hbond_donors = hbond_acceptors = None
+                tpsa = logp = aromatic_rings = None
+                N_count = O_count = S_count = halogen_count = None
+                ring_count = heterocycle_count = None
+                double_bond_count = triple_bond_count = None
+                fg_flags = {}
+                fg_counts = {}
+                Fsp3 = Bertz = molar_refractivity = None
+
+            # ------------------------------------------------------------
+            # Build metadata block
+            # ------------------------------------------------------------
             meta = {
-                "metadata_version": METADATA_VERSION,
+                "metadata_version": 3,
                 "inchi_key": inchi_key,
                 "smiles": smiles,
                 "mol_name": mol_name,
@@ -356,6 +444,7 @@ class CleaningStage(BaseStage):
                 "charge": charge_val,
                 "multiplicity": multiplicity,
 
+                # Physchem
                 "rotatable_bonds": rotatable_bonds,
                 "molecular_weight": molecular_weight,
                 "heavy_atom_count": heavy_atom_count,
@@ -364,6 +453,25 @@ class CleaningStage(BaseStage):
                 "tpsa": tpsa,
                 "logp": logp,
                 "aromatic_rings": aromatic_rings,
+
+                # Structural counts
+                "N_count": N_count,
+                "O_count": O_count,
+                "S_count": S_count,
+                "halogen_count": halogen_count,
+                "ring_count": ring_count,
+                "heterocycle_count": heterocycle_count,
+                "double_bond_count": double_bond_count,
+                "triple_bond_count": triple_bond_count,
+
+                # Functional groups
+                **fg_flags,
+                **fg_counts,
+
+                # Global shape
+                "Fsp3": Fsp3,
+                "Bertz_complexity": Bertz,
+                "molar_refractivity": molar_refractivity,
 
                 "provenance": {
                     "source_file": source_file,
@@ -374,7 +482,7 @@ class CleaningStage(BaseStage):
                 },
             }
 
-            # Add optional metadata fields
+            # Optional metadata fields
             for key, default in DEFAULT_METADATA.items():
                 if key in ("mol_name", "mol_name_iupac"):
                     continue
@@ -383,6 +491,7 @@ class CleaningStage(BaseStage):
                     value = default
                 meta[key] = value
 
+            # Warn if melting temp missing
             if meta["melting_temp"] == "N/A":
                 self.log(
                     f"[WARNING] melting_temp not provided for {inchi_key}. "
@@ -390,22 +499,21 @@ class CleaningStage(BaseStage):
                 )
                 self.warnings["missing_melting_temp"] += 1
 
-            # Serialise once
+            # Serialise
             meta_json = json.dumps(meta, indent=2)
             meta_hash = _json_hash(meta)
 
             # ------------------------------------------------------------
-            # 1. Write to job-local metadata directory (always)
+            # Write local metadata
             # ------------------------------------------------------------
             local_path = os.path.join(metadata_dir, f"{inchi_key}.json")
             with open(local_path, "w") as f:
                 f.write(meta_json)
 
             # ------------------------------------------------------------
-            # 2. Write to global metadata directory (only if changed)
+            # Write global metadata (with overwrite option)
             # ------------------------------------------------------------
             global_meta_dir = self.config.get("constant_files", {}).get("metadata_dir")
-
             if not global_meta_dir:
                 self.log("[WARNING] No global metadata_dir defined in config; skipping global write.")
                 continue
@@ -415,20 +523,23 @@ class CleaningStage(BaseStage):
 
             write_global = True
 
-            if os.path.exists(global_path):
-                try:
-                    with open(global_path) as f:
-                        existing = json.load(f)
-                    existing_hash = _json_hash(existing)
-                    if existing_hash == meta_hash:
-                        write_global = False
-                except Exception:
-                    write_global = True
+            if not overwrite:
+                if os.path.exists(global_path):
+                    try:
+                        with open(global_path) as f:
+                            existing = json.load(f)
+                        if _json_hash(existing) == meta_hash:
+                            write_global = False
+                    except Exception:
+                        write_global = True
 
             if write_global:
                 with open(global_path, "w") as f:
                     f.write(meta_json)
-                self.log(f"[INFO] Global metadata updated: {global_path}")
+                if overwrite:
+                    self.log(f"[INFO] Global metadata overwritten: {global_path}")
+                else:
+                    self.log(f"[INFO] Global metadata updated: {global_path}")
             else:
                 self.log(f"[INFO] Global metadata unchanged: {global_path}")
 

@@ -16,21 +16,21 @@ def main():
 
     base_dir = os.path.abspath("pipeline_data")
 
-    input_csv= ("/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv")
+    input_csv= ("/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv")
 
     # Declarative pipeline specification
     pipeline_spec = [
-        {"stage": "cleaning", "args": {"input_csv":input_csv}},
-        {"stage": "generation", "args": {"engine": "rdkit", "num_confs": 100}},
-        {"stage": "pruning", "args": {"n": 2}},
-        {"stage": "optimisation", "args": {"engine": "gxtb"}},
-        {"stage": "orcacosmo", "args": {}},
-        {"stage": "solubility", "args": {}},
+        {"stage": "cleaning", "args": {"input_csv":input_csv,"overwrite_metadata":True}},
+        #{"stage": "generation", "args": {"engine": "rdkit", "num_confs": 100}},
+        #{"stage": "pruning", "args": {"n": 2}},
+        #{"stage": "optimisation", "args": {"engine": "gxtb"}},
+        #{"stage": "orcacosmo", "args": {}},
+        #{"stage": "solubility", "args": {}},
     ]
 
     # Global request parameters
     parameters = {
-        "title": "full_run",
+        "title": "overwrite_metadata",
         "resources": {"cpus": 20, "memory_gb": 64},
         "config": config,
     }
@@ -38,7 +38,7 @@ def main():
     # Create the Request
     req = Request.create_new(
         base_dir=base_dir,
-        dataset="full_run",
+        dataset="overwrite_metadata",
         pipeline_spec=pipeline_spec,
         parameters=parameters,
     )
