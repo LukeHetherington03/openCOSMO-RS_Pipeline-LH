@@ -1,5 +1,5 @@
 {
-  "engine": "gxtb",
+  "engine": "gxtb_opt",
   "level": "normal",
   "max_iter": 250,
   "global_fail_threshold": 0.8,

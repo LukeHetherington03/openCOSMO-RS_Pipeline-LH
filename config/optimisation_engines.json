@@ -1,0 +1,161 @@
+{
+  "orca_opt_fast": {
+    "family": "orca",
+    "legacy": "05_ORCA_DFT_FAST",
+    "legacy_class": "ORCA_DFT_FAST",
+    "job_part": 1,
+    "opt": true,
+    "sp": false,
+    "cpcm": "none",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVP(-f)"
+  },
+
+  "orca_opt_final": {
+    "family": "orca",
+    "legacy": "08_ORCA_DFT_final (job 1)",
+    "legacy_class": "ORCA_DFT_FINAL",
+    "job_part": 1,
+    "opt": true,
+    "sp": false,
+    "cpcm": "none",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVP"
+  },
+
+  "orca_opt_cpcm_fast": {
+    "family": "orca",
+    "legacy": "16_ORCA_DFT_CPCM_fast",
+    "legacy_class": "ORCA_DFT_CPCM_FAST",
+    "job_part": 1,
+    "opt": true,
+    "sp": false,
+    "cpcm": "default",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVP(-f)"
+  },
+
+  "orca_opt_cpcm_final": {
+    "family": "orca",
+    "legacy": "21_ORCA_DFT_CPCM_final (job 1)",
+    "legacy_class": "ORCA_DFT_CPCM_FINAL",
+    "job_part": 1,
+    "opt": true,
+    "sp": false,
+    "cpcm": "default",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVP"
+  },
+
+  "orca_sp_fast": {
+    "family": "orca",
+    "legacy": "16_ORCA_DFT_CPCM_fast (SP behaviour)",
+    "legacy_class": "ORCA_DFT_CPCM_FAST",
+    "job_part": 1,
+    "opt": false,
+    "sp": true,
+    "cpcm": "default",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVP"
+  },
+
+  "orca_sp_final": {
+    "family": "orca",
+    "legacy": "21_ORCA_DFT_CPCM_final (job 2)",
+    "legacy_class": "ORCA_DFT_CPCM_FINAL",
+    "job_part": 2,
+    "opt": false,
+    "sp": true,
+    "cpcm": "custom",
+    "alpb": false,
+    "method": "BP86",
+    "basis": "def2-TZVPD"
+  },
+
+  "orca_xtb2_alpb_opt": {
+    "family": "orca",
+    "legacy": "10_orca_xtb2_alpb",
+    "legacy_class": "ORCA_XTB2_ALPB",
+    "job_part": 1,
+    "opt": true,
+    "sp": false,
+    "cpcm": "none",
+    "alpb": true,
+    "method": "XTB2",
+    "basis": null,
+    "solvent": "water"
+  },
+
+  "xtb_opt_loose": {
+    "family": "xtb",
+    "gfn": 2,
+    "level": "loose"
+  },
+
+  "xtb_opt_normal": {
+    "family": "xtb",
+    "gfn": 2,
+    "level": "normal"
+  },
+
+  "xtb_opt_tight": {
+    "family": "xtb",
+    "gfn": 2,
+    "level": "tight"
+  },
+
+  "xtb_opt_vtight": {
+    "family": "xtb",
+    "gfn": 2,
+    "level": "vtight"
+  },
+
+  "gxtb_opt_loose": {
+    "family": "gxtb",
+    "gfn": 2,
+    "level": "loose",
+    "opt_flag": "--opt loose"
+  },
+
+  "gxtb_opt_normal": {
+    "family": "gxtb",
+    "gfn": 2,
+    "level": "normal",
+    "opt_flag": "--opt"
+  },
+
+  "gxtb_opt_tight": {
+    "family": "gxtb",
+    "gfn": 2,
+    "level": "tight",
+    "opt_flag": "--opt tight"
+  },
+
+  "gxtb_opt_vtight": {
+    "family": "gxtb",
+    "gfn": 2,
+    "level": "vtight",
+    "opt_flag": "--opt vtight"
+  },
+
+  "forcefield_mmff": {
+    "family": "forcefield",
+    "legacy": "MMFF94 optimisation",
+    "opt": true,
+    "sp": false,
+    "forcefield": "MMFF94"
+  },
+
+  "forcefield_uff": {
+    "family": "forcefield",
+    "legacy": "UFF optimisation",
+    "opt": true,
+    "sp": false,
+    "forcefield": "UFF"
+  }
+}

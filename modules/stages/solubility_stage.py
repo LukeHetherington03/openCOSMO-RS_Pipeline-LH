@@ -124,7 +124,7 @@ class SolubilityStage(BaseStage):
 
     # ------------------------------------------------------------
     # Load ORCA‑COSMO summary
-    # ------------------------------------------------------------
+        # ------------------------------------------------------------
     def _load_orcacosmo_summary(self, stage_input):
         stage_input = self.require_file(stage_input, "orcacosmo_summary.json")
 
@@ -137,13 +137,19 @@ class SolubilityStage(BaseStage):
             path = entry["orcacosmo_path"]
             lookup_id = entry["lookup_id"]
 
-            grouped.setdefault(inchi_key, {"lookup_id": lookup_id, "paths": []})
+            if inchi_key not in grouped:
+                grouped[inchi_key] = {
+                    "lookup_ids": set(),
+                    "paths": []
+                }
+
+            grouped[inchi_key]["lookup_ids"].add(lookup_id)
             grouped[inchi_key]["paths"].append(path)
 
         self.orcacosmo_entries = [
             {
-                "lookup_id": data["lookup_id"],
                 "inchi_key": inchi_key,
+                "lookup_ids": sorted(list(data["lookup_ids"])),
                 "paths": data["paths"],
             }
             for inchi_key, data in grouped.items()
@@ -157,7 +163,7 @@ class SolubilityStage(BaseStage):
     def _process_solute(self, inchi_key):
         entry = next(e for e in self.orcacosmo_entries if e["inchi_key"] == inchi_key)
         paths = entry["paths"]
-        lookup_id = entry["lookup_id"]
+        lookup_ids = entry["lookup_ids"]
 
         self.log(f"[INFO] === Solubility calculation started for {inchi_key} ===")
 
@@ -232,7 +238,7 @@ class SolubilityStage(BaseStage):
         raw_path = mol_dir / "raw_output.txt"
         raw_path.write_text(result["raw_stdout"] or "")
 
-        # Optionally preserve import validation file per molecule
+        # Optional validation file
         validation_src = Path(result.get("import_validation_file", ""))
         if validation_src.exists():
             shutil.copy(validation_src, mol_dir / "import_validation.txt")
@@ -242,7 +248,7 @@ class SolubilityStage(BaseStage):
         with AtomicWriter(out_json) as f:
             json.dump(
                 {
-                    "lookup_id": lookup_id,
+                    "lookup_ids": lookup_ids,
                     "inchi_key": inchi_key,
                     "smiles": meta["smiles"],
                     "melting_temp": meta["Tm"],
@@ -260,29 +266,36 @@ class SolubilityStage(BaseStage):
         # Write human summary
         summary_path = mol_dir / "summary.txt"
         summary = f"""
-Solubility Summary
-------------------
-Molecule: {inchi_key}
-SMILES: {meta['smiles']}
-Melting Temp: {meta['Tm']}
-Experimental solubility: {meta['experimental_solubility_mol_frac']}
-Predicted solubility: {result['solubility']}
-Temperature: {self.temperature} K
-"""
+    Solubility Summary
+    ------------------
+    Molecule: {inchi_key}
+    Lookup IDs: {', '.join(lookup_ids)}
+    SMILES: {meta['smiles']}
+    Melting Temp: {meta['Tm']}
+    Experimental solubility: {meta['experimental_solubility_mol_frac']}
+    Predicted solubility: {result['solubility']}
+    Temperature: {self.temperature} K
+    Solute conformers used: {n_solute}
+    Solvent conformers used: {n_solvent}
+    """
         summary_path.write_text(summary.strip() + "\n")
 
+        # Record success
         self.successful.append(
             {
-                "lookup_id": lookup_id,
+                "lookup_ids": lookup_ids,
                 "inchi_key": inchi_key,
                 "predicted": result["solubility"],
                 "experimental": meta["experimental_solubility_mol_frac"],
+                "n_solute_confs": n_solute,
+                "n_solvent_confs": n_solvent,
                 "json": str(out_json),
                 "summary": str(summary_path),
             }
         )
 
         self.log(f"[INFO] === Solubility calculation finished for {inchi_key} ===")
+
 
     # ------------------------------------------------------------
     # Metadata loader
@@ -334,17 +347,22 @@ Temperature: {self.temperature} K
 
         for entry in self.successful:
             inchi = entry["inchi_key"]
-            lookup = entry["lookup_id"]
+            lookup_ids = entry["lookup_ids"]
             pred = entry["predicted"]
             exp = entry["experimental"]
+            n_solute = entry["n_solute_confs"]
+            n_solvent = entry["n_solvent_confs"]
 
             abs_err = abs(pred - exp) if pred is not None and exp is not None else None
 
             lines.append("------------------------------------------------------------")
-            lines.append(f"{inchi} (lookup: {lookup})")
+            lines.append(f"{inchi}")
+            lines.append(f"Lookup IDs: {', '.join(lookup_ids)}")
             lines.append(f"Predicted:    {pred}")
             lines.append(f"Experimental: {exp}")
             lines.append(f"Abs Error:    {abs_err}")
+            lines.append(f"Solute conformers:  {n_solute}")
+            lines.append(f"Solvent conformers: {n_solvent}")
             lines.append(f"JSON:         {entry['json']}")
             lines.append(f"Summary:      {entry['summary']}")
             lines.append("")

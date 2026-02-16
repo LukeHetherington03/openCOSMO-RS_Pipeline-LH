@@ -21,31 +21,17 @@ from modules.parsers.opt.orca_log_parser import ORCALogParser
 from modules.parsers.opt.xtb_log_parser import XTBLogParser
 
 
-# -------------------------------------------------------------------------
-# Backend dispatch table (new API)
-# -------------------------------------------------------------------------
-OPT_BACKENDS = {
-    "xtb": "_backend_xtb",
-    "gxtb": "_backend_gxtb",
-    "orca": "_backend_orca",
-    "orca_fast": "_backend_orca",
-    "orca_final": "_backend_orca",
-    "forcefield": "_backend_forcefield",
-}
+VALID_LEVELS = ("loose", "normal", "tight", "vtight")
 
 PARSERS = {
+    "orca": ORCALogParser,
     "xtb": XTBLogParser,
     "gxtb": GxTBLogParser,
-    "orca": ORCALogParser,
-    "orca_fast": ORCALogParser,
-    "orca_final": ORCALogParser,
 }
-
-VALID_LEVELS = ("loose", "normal", "tight", "vtight")
 
 
 # =========================================================================
-#  NEW OPTIMISATION STAGE
+#  OPTIMISATION STAGE (FINAL VERSION)
 # =========================================================================
 class OptimisationStage(BaseStage):
 
@@ -65,79 +51,75 @@ class OptimisationStage(BaseStage):
             shutil.copy(energies_file, inputs_energies)
         self.log(f"Copied energies.json → {inputs_energies}")
 
-        # Parameters
-        params = self.parameters or {}
-        engine = params.get("engine", "gxtb").lower()
-        level = params.get("level", "normal").lower()
-        max_iter = params.get("max_iter", 250)
-        global_fail_threshold = params.get("global_fail_threshold", 0.8)
-        keep_scratch = params.get("keep_scratch", False)
-        gfn_level = params.get("gfn", 2)
-
-        if level not in VALID_LEVELS:
-            self.fail(f"Unknown optimisation level: {level}")
-
-        self.log(f"Engine: {engine}, level={level}, max_iter={max_iter}")
-        self.log(f"Strict mode: {self.strict_mode}")
-        self.log(f"Keep scratch: {keep_scratch}")
-
         # Load conformers
         conformer_set = ConformerSet.load(energies_file)
-        entries = conformer_set.records
+        all_records = conformer_set.records
+
+        # Load optimisation config
+        defaults_path = self.config["optimisation"]["defaults"]
+        engines_path = self.config["optimisation"]["engines"]
+
+        with open(defaults_path) as f:
+            defaults = json.load(f)
+        with open(engines_path) as f:
+            engine_registry = json.load(f)
+
+        # Merge defaults + user overrides
+        params = dict(defaults)
+        if self.parameters:
+            params.update(self.parameters)
+
+        # Engine selection
+        self.engine_name = params.get("engine")
+        if self.engine_name not in engine_registry:
+            self.fail(f"Unknown optimisation engine: {self.engine_name}")
+
+        self.engine_spec = engine_registry[self.engine_name]
+
+        # Stage-level parameters
+        self.level = self.engine_spec.get("level", params.get("level", "normal"))
+        self.max_iter = params.get("max_iter", 250)
+        self.gfn_level = self.engine_spec.get("gfn", params.get("gfn", 2))
+        self.keep_scratch = params.get("keep_scratch", False)
+        self.global_fail_threshold = params.get("global_fail_threshold", 0.8)
+
+        # Resume logic
+        resume = params.get("resume", True)
+
+        if not resume or not self.job.pending_items:
+            self.set_items([rec.lookup_id for rec in all_records])
+            self._clear_checkpoints()
+            self.log("[INFO] Starting optimisation from scratch")
+        else:
+            self.log("[INFO] Resuming optimisation")
+            self.log(f"[INFO] Pending conformers: {len(self.job.pending_items)}")
+
+        # Filter pending conformers
+        pending = [rec for rec in all_records if rec.lookup_id in self.job.pending_items]
+
+        if not pending:
+            self.log("No pending conformers — optimisation stage already complete.")
+            return
 
         # Ensure optimisation_history exists
-        for rec in entries:
+        for rec in pending:
             if not hasattr(rec, "optimisation_history"):
                 rec.optimisation_history = []
 
         # Prepare XYZs
-        prep, valid_records = self._prepare_inputs(entries)
-        self.set_items([rec.lookup_id for rec in valid_records])
+        prep, valid_records = self._prepare_inputs(pending)
         self.log(f"Valid conformers: {len(valid_records)}")
 
-        # Group by molecule
-        molecules = self._group_by_molecule(valid_records)
+        # Run optimisation
+        optimised_records = self._optimise_all(valid_records)
 
-        # Optimise
-        optimised_records = self._optimise_all(
-            valid_records,
-            engine,
-            level,
-            max_iter,
-            global_fail_threshold,
-            keep_scratch,
-            gfn_level,
-        )
+        # Merge checkpoints → final energies.json
+        final_set = self._merge_checkpoints()
+        final_set.save(self.get_stage_output())
 
-        # Write outputs
-        self._write_outputs(optimised_records)
+        self.log(f"[INFO] Optimisation complete. Output written to {self.get_stage_output()}")
+        self.job.mark_complete()
 
-        # Molecule summary
-        self._write_human_summary_csv(
-            optimised_records,
-            molecules,
-            engine,
-            level,
-            self.outputs_dir,
-        )
-
-        # Metadata
-        meta_path = os.path.join(self.outputs_dir, "optimisation_metadata.json")
-        with AtomicWriter(meta_path) as f:
-            json.dump(
-                {
-                    "stage": "optimisation",
-                    "engine": engine,
-                    "level": level,
-                    "max_iter": max_iter,
-                    "num_input": len(entries),
-                    "num_output": len(optimised_records),
-                    "missing_xyz": prep["missing"],
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                },
-                f,
-                indent=2,
-            )
 
     # ---------------------------------------------------------------------
     # Input preparation
@@ -180,16 +162,7 @@ class OptimisationStage(BaseStage):
     # ---------------------------------------------------------------------
     # Optimise all conformers
     # ---------------------------------------------------------------------
-    def _optimise_all(
-        self,
-        records,
-        engine,
-        level,
-        max_iter,
-        global_fail_threshold,
-        keep_scratch,
-        gfn_level,
-    ):
+    def _optimise_all(self, records):
         optimised = []
         total = len(records)
         failures = 0
@@ -198,28 +171,28 @@ class OptimisationStage(BaseStage):
             self.log(f"[{idx}/{total}] Optimising {rec.lookup_id}", indent=2)
 
             try:
-                updated = self._optimise_single(
-                    rec, engine, level, max_iter, keep_scratch, gfn_level
-                )
+                updated = self._optimise_single(rec)
                 optimised.append(updated)
 
                 last = updated.optimisation_history[-1]
                 status = last["status"]
+
                 self.update_progress(rec.lookup_id, success=(status == "converged"))
 
                 if status != "converged":
                     failures += 1
+
+                # Write checkpoint
+                self._write_checkpoint(rec.lookup_id, updated)
 
             except Exception as e:
                 failures += 1
                 self.update_progress(rec.lookup_id, success=False)
                 self.log(f"[ERROR] Exception during optimisation of {rec.lookup_id}: {e}")
 
-            if total > 0 and failures / total >= global_fail_threshold:
-                self.log(
-                    f"[ERROR] Global failure threshold reached "
-                    f"({failures}/{total}); aborting optimisation."
-                )
+            # Global failure threshold
+            if total > 0 and failures / total >= self.global_fail_threshold:
+                self.log(f"[ERROR] Global failure threshold reached ({failures}/{total}); aborting optimisation.")
                 break
 
         usable = [r for r in optimised if self._is_record_usable(r)]
@@ -227,11 +200,9 @@ class OptimisationStage(BaseStage):
         if not usable:
             self.fail("Optimisation produced zero usable conformers.")
 
-        dropped = len(optimised) - len(usable)
-        if dropped > 0:
-            self.log(f"[WARNING] Dropped {dropped} unusable conformers.")
-
         return usable
+
+
 
     # ---------------------------------------------------------------------
     # Usability check
@@ -255,31 +226,21 @@ class OptimisationStage(BaseStage):
     # ---------------------------------------------------------------------
     # Optimise a single conformer
     # ---------------------------------------------------------------------
-    def _optimise_single(self, rec, engine, level, max_iter, keep_scratch, gfn_level):
+    def _optimise_single(self, rec):
         lookup = rec.lookup_id
         input_xyz = rec.xyz_path
 
-        # Determine iteration number
-        iteration = len(rec.optimisation_history) 
+        iteration = len(rec.optimisation_history)
 
-        # Output paths
         output_xyz = os.path.join(self.outputs_dir, "xyz", f"{lookup}_opt{iteration}.xyz")
         output_log = os.path.join(self.outputs_dir, "log", f"{lookup}_opt{iteration}.log")
 
         os.makedirs(os.path.dirname(output_xyz), exist_ok=True)
         os.makedirs(os.path.dirname(output_log), exist_ok=True)
 
-        # Scratch directory
-        scratch_dir = os.path.join(
-            self.job.job_dir,
-            "scratch",
-            engine,
-            lookup,
-            f"opt{iteration}",
-        )
+        scratch_dir = os.path.join(self.job.job_dir, "scratch", lookup, f"opt{iteration}")
         os.makedirs(scratch_dir, exist_ok=True)
 
-        # Run backend
         start_wall = time.perf_counter()
         start_cpu = time.process_time()
 
@@ -288,55 +249,78 @@ class OptimisationStage(BaseStage):
             output_xyz=output_xyz,
             output_log=output_log,
             scratch_dir=scratch_dir,
-            engine=engine,
-            level=level,
-            max_iter=max_iter,
-            gfn_level=gfn_level,
+            engine_name=self.engine_name,
+            engine_spec=self.engine_spec,
+            level=self.level,
+            max_iter=self.max_iter,
+            gfn_level=self.gfn_level,
         )
 
         end_wall = time.perf_counter()
         end_cpu = time.process_time()
 
-        # Parse log
-        parsed = self._parse_backend_log(output_log, engine)
-
-        # Determine status
+        parsed = self._parse_backend_log(output_log, self.engine_spec)
         status = self._determine_status(parsed, output_xyz)
-
-        # Validate energy
         energy = self._validate_energy(parsed.get("energy"))
 
-        # Assign quality + score
-        quality = self._assign_quality(status, level)
-        score = self._assign_score(status, level)
-
-        # Update history
         self._update_history(
             rec,
-            engine,
-            level,
-            status,
-            energy,
-            output_xyz,
-            output_log,
-            backend_result,
-            quality,
-            score,
-            start_wall,
-            end_wall,
-            start_cpu,
-            end_cpu,
+            engine=self.engine_name,
+            level=self.level,
+            status=status,
+            energy=energy,
+            xyz_path=output_xyz,
+            log_path=output_log,
+            backend_result=backend_result,
+            start_wall=start_wall,
+            end_wall=end_wall,
+            start_cpu=start_cpu,
+            end_cpu=end_cpu,
         )
 
-        # Update conformer
         rec.energy = energy
         rec.xyz_path = output_xyz if os.path.exists(output_xyz) else None
 
-        # Cleanup scratch
-        if not keep_scratch:
+        if not self.keep_scratch:
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
         return rec
+
+
+    
+    
+    # ---------------------------------------------------------------------
+    # Checkpoint Helpers
+    # ---------------------------------------------------------------------
+
+    def _checkpoint_path(self, lookup_id):
+        cp = os.path.join(self.outputs_dir, "checkpoints")
+        os.makedirs(cp, exist_ok=True)
+        return os.path.join(cp, f"{lookup_id}.json")
+
+    def _write_checkpoint(self, lookup_id, rec):
+        path = self._checkpoint_path(lookup_id)
+        ConformerSet([rec]).save(path)
+        self.log(f"[INFO] Checkpoint written: {path}")
+
+    def _clear_checkpoints(self):
+        cp = os.path.join(self.outputs_dir, "checkpoints")
+        if os.path.exists(cp):
+            shutil.rmtree(cp)
+        os.makedirs(cp, exist_ok=True)
+
+    def _merge_checkpoints(self):
+        cp = os.path.join(self.outputs_dir, "checkpoints")
+        all_records = []
+
+        for fname in os.listdir(cp):
+            if fname.endswith(".json"):
+                cs = ConformerSet.load(os.path.join(cp, fname))
+                all_records.extend(cs.records)
+
+        return ConformerSet(all_records)
+
+
 
     # ---------------------------------------------------------------------
     # Backend runner
@@ -347,68 +331,162 @@ class OptimisationStage(BaseStage):
         output_xyz,
         output_log,
         scratch_dir,
-        engine,
+        engine_name,
+        engine_spec,
         level,
         max_iter,
         gfn_level,
     ):
-        if engine not in OPT_BACKENDS:
-            self.fail(f"Unknown optimisation engine: {engine}")
+        family = engine_spec["family"]
 
-        method = getattr(self, OPT_BACKENDS[engine])
+        if family == "orca":
+            return self._backend_orca(
+                input_xyz=input_xyz,
+                output_xyz=output_xyz,
+                output_log=output_log,
+                scratch_dir=scratch_dir,
+                engine_spec=engine_spec,
+                level=level,
+                max_iter=max_iter,
+            )
 
-        return method(
-            input_xyz=input_xyz,
-            output_xyz=output_xyz,
-            output_log=output_log,
-            scratch_dir=scratch_dir,
-            level=level,
-            max_iter=max_iter,
-            gfn_level=gfn_level,
-        )
+        if family == "gxtb":
+            return self._backend_gxtb(
+                input_xyz=input_xyz,
+                output_xyz=output_xyz,
+                output_log=output_log,
+                scratch_dir=scratch_dir,
+                level=level,
+                max_iter=max_iter,
+                gfn_level=gfn_level,
+            )
+        if family == "xtb":
+            return self._backend_xtb(
+                input_xyz=input_xyz,
+                output_xyz=output_xyz,
+                output_log=output_log,
+                scratch_dir=scratch_dir,
+                level=level,
+                max_iter=max_iter,
+                gfn_level=gfn_level,
+            )
+
+        if family == "forcefield":
+            return self._backend_forcefield(
+                input_xyz=input_xyz,
+                output_xyz=output_xyz,
+                output_log=output_log,
+                scratch_dir=scratch_dir,
+                engine_spec=engine_spec,
+            )
+
+        self.fail(f"Unknown engine family: {family}")
 
     # ---------------------------------------------------------------------
-    # Backend: Forcefield (placeholder)
+    # Backend: Forcefield
     # ---------------------------------------------------------------------
-    def _backend_forcefield(self, input_xyz, output_xyz, output_log, scratch_dir, **kwargs):
+    def _backend_forcefield(self, input_xyz, output_xyz, output_log, scratch_dir, engine_spec, **kwargs):
         with open(output_log, "w") as f:
-            f.write("Forcefield optimisation placeholder\n")
+            f.write(f"Forcefield optimisation placeholder ({engine_spec.get('forcefield')})\n")
 
         shutil.copy(input_xyz, output_xyz)
 
         return {
             "run_status": "ok",
-            "version": "unknown",  # placeholder
-            "command": [],         # placeholder
-            "command_str": "",     # placeholder
+            "version": "unknown",
+            "command": [],
+            "command_str": "",
         }
 
     # ---------------------------------------------------------------------
-    # Backend: ORCA
+    # Backend: ORCA (final version)
     # ---------------------------------------------------------------------
-    def _backend_orca(self, input_xyz, output_xyz, output_log, scratch_dir, level, max_iter, **kwargs):
+    def _backend_orca(
+        self,
+        input_xyz,
+        output_xyz,
+        output_log,
+        scratch_dir,
+        engine_spec,
+        level,
+        max_iter,
+        **kwargs,
+    ):
         lookup = os.path.splitext(os.path.basename(input_xyz))[0]
         inp_file = os.path.join(scratch_dir, f"{lookup}.inp")
 
-        opt_keyword = {
+        opt_keywords = {
             "loose": "LooseOpt",
             "normal": "Opt",
             "tight": "TightOpt",
             "vtight": "VeryTightOpt",
-        }[level]
+        }
 
-        method_line = f"! BP86 def2-TZVP {opt_keyword}"
+        opt = engine_spec.get("opt", True)
+        sp = engine_spec.get("sp", False)
+        cpcm_mode = engine_spec.get("cpcm", "none")
+        alpb = engine_spec.get("alpb", False)
+        method = engine_spec.get("method")
+        basis = engine_spec.get("basis")
+        solvent = engine_spec.get("solvent", "water")
 
-        # Write ORCA input
+        lines = []
+        lines.append("%MaxCore 2000")
+        lines.append("")
+
+        # CPCM block
+        if cpcm_mode == "default":
+            lines.append("%cpcm")
+            lines.append("end")
+            lines.append("")
+
+        elif cpcm_mode == "custom":
+            chem_dir = self.config["constant_files"]["chemistry_dir"]
+            cpcm_path = os.path.join(chem_dir, "cpcm_radii.json")
+            with open(cpcm_path) as f:
+                cpcm_cfg = json.load(f)
+
+            lines.append("%cpcm")
+            for Z, r in cpcm_cfg["radii"].items():
+                lines.append(f"  radius[{Z}] {r}")
+            lines.append(f"  cut_area {cpcm_cfg['cut_area']}")
+            lines.append("end")
+            lines.append("")
+
+        # Method line
+        if alpb:
+            opt_kw = opt_keywords[level] if opt and not sp else "SP"
+            method_line = f"! XTB2 {opt_kw} ALPB({solvent})"
+        else:
+            if opt and not sp:
+                opt_kw = opt_keywords[level]
+            elif sp and not opt:
+                opt_kw = "SP"
+            else:
+                opt_kw = opt_keywords[level]
+
+            if basis:
+                method_line = f"! {method} {basis} {opt_kw}"
+            else:
+                method_line = f"! {method} {opt_kw}"
+
+        lines.append(method_line)
+        lines.append("")
+        lines.append(f"%base \"{lookup}\"")
+        lines.append("")
+        lines.append("* xyz 0 1")
+
+        with open(input_xyz) as xyz:
+            xyz_lines = xyz.readlines()
+            lines.extend(xyz_lines[2:])
+
+        lines.append("*")
+        lines.append("")
+
         with open(inp_file, "w") as f:
-            f.write(method_line + "\n")
-            f.write("* xyz 0 1\n")
-            with open(input_xyz) as xyz:
-                lines = xyz.readlines()
-                f.writelines(lines[2:])
-            f.write("*\n")
+            f.write("\n".join(lines))
 
-        cmd = ["orca", inp_file]
+        cmd = [self.config["orca"]["executable"], inp_file]
 
         try:
             with open(output_log, "w") as log:
@@ -423,10 +501,10 @@ class OptimisationStage(BaseStage):
             final_xyz = os.path.join(scratch_dir, f"{lookup}.xyz")
             if os.path.exists(final_xyz):
                 shutil.copy(final_xyz, output_xyz)
+                run_status = "ok"
             else:
                 output_xyz = None
-
-            run_status = "ok"
+                run_status = "failed"
 
         except subprocess.CalledProcessError:
             run_status = "failed"
@@ -434,7 +512,7 @@ class OptimisationStage(BaseStage):
 
         return {
             "run_status": run_status,
-            "version": "unknown",  # placeholder
+            "version": "unknown",
             "command": cmd,
             "command_str": " ".join(cmd),
         }
@@ -442,43 +520,63 @@ class OptimisationStage(BaseStage):
     # ---------------------------------------------------------------------
     # Backend: gXTB
     # ---------------------------------------------------------------------
-    def _backend_gxtb(self, input_xyz, output_xyz, output_log, scratch_dir, level, max_iter, gfn_level, **kwargs):
+    def _backend_gxtb(
+        self,
+        input_xyz,
+        output_xyz,
+        output_log,
+        scratch_dir,
+        level,
+        max_iter,
+        gfn_level,
+        **kwargs
+    ):
+        import os
+        import shutil
+        import subprocess
+        import math
+
         xtb_bin = self.config["xtb"]["executable"]
         gxtb_bin = self.config["gxtb"]["executable"]
 
-        tmp_xyz = os.path.join(scratch_dir, "input.xyz")
+        # Prepare scratch
+        tmp_xyz = os.path.join(scratch_dir, "molecule.xyz")
         opt_tmp = os.path.join(scratch_dir, "xtbopt.xyz")
 
-        if os.path.exists(tmp_xyz):
-            os.remove(tmp_xyz)
-        if os.path.exists(opt_tmp):
-            os.remove(opt_tmp)
+        for p in (tmp_xyz, opt_tmp):
+            if os.path.exists(p):
+                os.remove(p)
 
         shutil.copy(input_xyz, tmp_xyz)
 
+        # Optimisation level
         opt_flag = {
-            "loose": "--opt loose",
-            "normal": "--opt",
-            "tight": "--opt tight",
-            "vtight": "--opt vtight",
+            "loose": ["--opt", "loose"],
+            "normal": ["--opt"],
+            "tight": ["--opt", "tight"],
+            "vtight": ["--opt", "vtight"],
         }[level]
 
+        # Parallelisation
         max_cores = os.cpu_count() or 1
         ncores = max(1, math.floor(max_cores * 0.8))
 
         env = os.environ.copy()
         env["OMP_NUM_THREADS"] = str(ncores)
 
+        # Build driver string EXACTLY like your working script
         driver_string = f"{gxtb_bin} -grad -c xtbdriver.xyz"
 
+        # Build command exactly like your working script
         cmd = [
             xtb_bin,
-            tmp_xyz,
+            "molecule.xyz",
             "--driver", driver_string,
-            opt_flag,
+            *opt_flag,
             "--iterations", str(max_iter),
         ]
 
+        # Run
         try:
             with open(output_log, "w") as log:
                 subprocess.run(
@@ -486,7 +584,8 @@ class OptimisationStage(BaseStage):
                     cwd=scratch_dir,
                     stdout=log,
                     stderr=log,
-                    check=True,
+                    text=True,
+                    check=False,
                     env=env,
                 )
 
@@ -503,15 +602,19 @@ class OptimisationStage(BaseStage):
 
         return {
             "run_status": run_status,
-            "version": "unknown",  # placeholder
+            "version": "unknown",
             "command": cmd,
             "command_str": " ".join(cmd),
         }
+
+
 
     # ---------------------------------------------------------------------
     # Backend: classic XTB
     # ---------------------------------------------------------------------
     def _backend_xtb(self, input_xyz, output_xyz, output_log, scratch_dir, level, max_iter, gfn_level, **kwargs):
+        xtb_bin = self.config["xtb"]["executable"]
+
         tmp_xyz = os.path.join(scratch_dir, "input.xyz")
         opt_tmp = os.path.join(scratch_dir, "xtbopt.xyz")
 
@@ -532,7 +635,7 @@ class OptimisationStage(BaseStage):
             iters = 1000
 
         cmd = [
-            "xtb",
+            xtb_bin,
             tmp_xyz,
             "--opt",
             "--gfn", str(gfn_level),
@@ -562,7 +665,7 @@ class OptimisationStage(BaseStage):
 
         return {
             "run_status": run_status,
-            "version": "unknown",  # placeholder
+            "version": "unknown",
             "command": cmd,
             "command_str": " ".join(cmd),
         }
@@ -570,8 +673,9 @@ class OptimisationStage(BaseStage):
     # ---------------------------------------------------------------------
     # Log parsing
     # ---------------------------------------------------------------------
-    def _parse_backend_log(self, log_path, engine):
-        parser_cls = PARSERS.get(engine)
+    def _parse_backend_log(self, log_path, engine_spec):
+        family = engine_spec["family"]
+        parser_cls = PARSERS.get(family)
         if not parser_cls:
             return {"energy": None, "converged": None}
 
@@ -612,40 +716,6 @@ class OptimisationStage(BaseStage):
             return None
 
     # ---------------------------------------------------------------------
-    # Quality scoring
-    # ---------------------------------------------------------------------
-    def _assign_quality(self, status, level):
-        if status == "converged":
-            return {
-                "loose": "medium",
-                "normal": "good",
-                "tight": "very_good",
-                "vtight": "excellent",
-            }.get(level, "good")
-
-        if status == "partial":
-            return "poor"
-
-        return "unusable"
-
-    # ---------------------------------------------------------------------
-    # Success score
-    # ---------------------------------------------------------------------
-    def _assign_score(self, status, level):
-        if status == "converged":
-            return {
-                "loose": 0.4,
-                "normal": 0.6,
-                "tight": 0.8,
-                "vtight": 1.0,
-            }.get(level, 0.6)
-
-        if status == "partial":
-            return 0.2
-
-        return 0.0
-
-    # ---------------------------------------------------------------------
     # Update optimisation history
     # ---------------------------------------------------------------------
     def _update_history(
@@ -658,8 +728,6 @@ class OptimisationStage(BaseStage):
         xyz_path,
         log_path,
         backend_result,
-        quality,
-        score,
         start_wall,
         end_wall,
         start_cpu,
@@ -689,106 +757,30 @@ class OptimisationStage(BaseStage):
                     "command": backend_result.get("command", []),
                     "command_str": backend_result.get("command_str", ""),
                 },
-                "convergence_quality": quality,
-                "success_score": score,
                 "timestamp": datetime.utcnow().isoformat() + "Z",
             }
         )
 
     # ---------------------------------------------------------------------
-    # Write outputs (now trivial)
+    # Write outputs
     # ---------------------------------------------------------------------
-    def _write_outputs(self, records):
-        outputs_dir = self.outputs_dir
+    def _write_human_summary_csv(self):
+        final_set = self._merge_checkpoints()
+        records = final_set.records
 
-        # summary.csv
-        summary_csv = os.path.join(outputs_dir, "summary.csv")
+        summary_csv = os.path.join(self.outputs_dir, "optimisation_summary.csv")
         rows = []
 
         for r in records:
             last = r.optimisation_history[-1]
-            rows.append(
-                {
-                    "lookup_id": r.lookup_id,
-                    "inchi_key": r.inchi_key,
-                    "conf_num": r.conf_num,
-                    "energy": last["energy"],
-                    "status": last["status"],
-                    "quality": last["convergence_quality"],
-                    "success_score": last["success_score"],
-                    "xyz_path": last["xyz_path"],
-                    "log_path": last["log_path"],
-                    "elapsed_seconds": last["elapsed_seconds"],
-                    "engine": last["engine"],
-                    "level": last["level"],
-                }
-            )
+            rows.append({
+                "lookup_id": r.lookup_id,
+                "inchi_key": r.inchi_key,
+                "energy": last["energy"],
+                "status": last["status"],
+                "xyz_path": last["xyz_path"],
+                "elapsed_seconds": last["elapsed_seconds"],
+            })
 
         pd.DataFrame(rows).to_csv(summary_csv, index=False)
 
-        # energies.json (canonical)
-        energies_json = self.get_stage_output()
-        ConformerSet(records).save(energies_json)
-
-        self.log(f"Optimisation outputs written to: {outputs_dir}")
-
-    # ---------------------------------------------------------------------
-    # Molecule-level summary
-    # ---------------------------------------------------------------------
-    def _write_human_summary_csv(self, records, molecules, engine, level, outputs_dir):
-        summary_csv = os.path.join(outputs_dir, "optimisation_summary.csv")
-        mol_stats = []
-
-        by_mol = {}
-        for r in records:
-            by_mol.setdefault(r.inchi_key, []).append(r)
-
-        for mol_id, mol_entries in molecules.items():
-            mol_records = by_mol.get(mol_id, [])
-
-            n_confs = len(mol_records)
-            n_success = 0
-            n_failed = 0
-            n_partial = 0
-            times = []
-            n_atoms = None
-
-            for r in mol_records:
-                last = r.optimisation_history[-1]
-                status = last["status"]
-
-                if status == "converged":
-                    n_success += 1
-                elif status == "failed":
-                    n_failed += 1
-                else:
-                    n_partial += 1
-
-                times.append(last["elapsed_seconds"])
-
-                if last["xyz_path"] and os.path.exists(last["xyz_path"]) and n_atoms is None:
-                    try:
-                        with open(last["xyz_path"]) as f:
-                            n_atoms = int(f.readline().strip())
-                    except Exception:
-                        pass
-
-            avg_time = float(np.mean(times)) if times else 0.0
-            total_time = float(np.sum(times)) if times else 0.0
-
-            mol_stats.append(
-                {
-                    "molecule_id": mol_id,
-                    "n_atoms": n_atoms,
-                    "n_conformers": n_confs,
-                    "n_converged": n_success,
-                    "n_failed": n_failed,
-                    "n_partial": n_partial,
-                    "avg_time_seconds": avg_time,
-                    "total_time_seconds": total_time,
-                    "engine": engine,
-                    "level": level,
-                }
-            )
-
-        pd.DataFrame(mol_stats).to_csv(summary_csv, index=False)

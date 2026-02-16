@@ -1,6 +1,7 @@
 {
   "engine": "rdkit",
-  "n": 1,
   "seed": 42,
-  "strict": false
+  "strict": false,
+  "threads": 1,
+  "gfn": "gfn2"
 }

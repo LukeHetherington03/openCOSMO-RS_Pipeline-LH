@@ -2,6 +2,11 @@
   "_comment": "Global configuration for openCOSMO-RS Pipeline",
   "_note": "All paths are absolute and point to real executables or directories",
 
+  "crest": {
+    "home": "/home/lunet/cglh4/software/crest",
+    "executable": "/home/lunet/cglh4/software/crest/crest"
+  },
+
   "gxtb": {
     "home": "/home/lunet/cglh4/software/g-xtb-main",
     "executable": "/home/lunet/cglh4/software/g-xtb-main/binary/gxtb"
@@ -42,7 +47,8 @@
     },
 
     "optimisation": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_defaults.json"
+      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_defaults.json",
+      "engines": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_engines.json"
     },
 
     "orcacosmo": {

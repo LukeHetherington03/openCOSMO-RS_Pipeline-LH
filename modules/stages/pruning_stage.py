@@ -1,10 +1,19 @@
 import os
+import shutil
 import pandas as pd
 import numpy as np
+
+from rdkit import Chem
+from rdkit.Chem import rdMolAlign
 
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 from modules.utils.conformers import ConformerRecord, ConformerSet
+
+
+# Energy conversion constants
+HARTREE_TO_KJ = 2625.49962
+HARTREE_TO_KCAL = 627.509474
 
 
 class PruningStage(BaseStage):
@@ -19,23 +28,40 @@ class PruningStage(BaseStage):
         pruning_summary.csv
     """
 
-    def execute(self):
-        # Strict mode
-        self.strict_mode = self.strict("pruning")
+    # -------------------------------------------------------------------------
+    # Dynamic pruning registry
+    # -------------------------------------------------------------------------
+    PRUNING_METHODS = {
+        "rmsd_threshold": "_prune_rmsd",
+        "energy_window": "_prune_energy_window",
+        "max_energy": "_prune_max_energy",
+        "percentile": "_prune_percentile",
+        "n": "_prune_keep_lowest_n",
+        "n_high": "_prune_keep_highest_n",
+        "n_start": "_prune_slice",
+    }
 
-        # Declare canonical output
+    # -------------------------------------------------------------------------
+    # Execution
+    # -------------------------------------------------------------------------
+    def execute(self):
+        self.strict_mode = self.strict("pruning")
         self.set_stage_output("energies.json")
 
-        # Retrieve stage input
         energies_file = self.require_file(
             self.get_stage_input(),
             "stage_input energies.json"
         )
 
+        # Copy input energies.json → inputs/
+        inputs_energies = os.path.join(self.inputs_dir, "energies.json")
+        if os.path.abspath(energies_file) != os.path.abspath(inputs_energies):
+            shutil.copy(energies_file, inputs_energies)
+        self.log(f"Copied energies.json → {inputs_energies}")
+
         self.log(f"Stage input: {energies_file}")
         self.log(f"Strict mode: {self.strict_mode}")
 
-        # Load conformers
         conformer_set = ConformerSet.load(energies_file)
         groups = conformer_set.group_by_molecule()
 
@@ -44,6 +70,7 @@ class PruningStage(BaseStage):
 
         self.warnings = {
             "molecules_all_missing_energy": 0,
+            "molecules_all_pruned": 0,
         }
 
         pruned_records = []
@@ -60,8 +87,7 @@ class PruningStage(BaseStage):
                 self.update_progress(inchi_key, success=True)
 
                 self.log(
-                    f"[INFO] Pruning complete for {inchi_key}: "
-                    f"kept {len(survivors)} conformers"
+                    f"[INFO] Molecule {inchi_key}: {len(confs)} → {len(survivors)} conformers after pruning"
                 )
 
             except Exception as e:
@@ -72,14 +98,62 @@ class PruningStage(BaseStage):
 
         pruned_set = ConformerSet(records=pruned_records)
         self._write_outputs(pruned_set, summary_rows)
-
         self._log_warning_summary()
 
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # Parameter extraction helpers
+    # -------------------------------------------------------------------------
+    def _get_float(self, params, key):
+        val = params.get(key, None)
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except Exception:
+            self.log(f"[WARNING] Could not parse float for '{key}': {val}")
+            return None
+
+    def _get_int(self, params, key):
+        val = params.get(key, None)
+        if val is None:
+            return None
+        try:
+            return int(val)
+        except Exception:
+            self.log(f"[WARNING] Could not parse int for '{key}': {val}")
+            return None
+
+    def _extract_params(self, params):
+        return {
+            "rmsd_threshold": self._get_float(params, "rmsd_threshold"),
+            "energy_window": self._get_float(params, "energy_window"),
+            "max_energy": self._get_float(params, "max_energy"),
+            "percentile": self._get_float(params, "percentile"),
+            "n": self._get_int(params, "n"),
+            "n_high": self._get_int(params, "n_high"),
+            "n_start": self._get_int(params, "n_start"),
+        }
+
+    # -------------------------------------------------------------------------
     # Pruning logic for a single molecule
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def _prune_group(self, inchi_key, conformers, params):
         total_confs = len(conformers)
+        p = self._extract_params(params)
+        keep_all = params.get("keep_all", False)
+
+        # Fast path
+        if keep_all:
+            self.log(f"[INFO] keep_all=True → skipping pruning for {inchi_key}")
+            return conformers, {
+                "inchi_key": inchi_key,
+                "total_conformers": total_confs,
+                "valid_energy_conformers": total_confs,
+                "removed_missing_energy": 0,
+                "kept_after_pruning": total_confs,
+                "methods_used": "none",
+                **p,
+            }
 
         # 1) Remove missing-energy conformers
         valid = []
@@ -107,34 +181,42 @@ class PruningStage(BaseStage):
                 "valid_energy_conformers": 0,
                 "removed_missing_energy": removed_missing_energy,
                 "kept_after_pruning": 0,
-                **self._extract_params(params),
+                "methods_used": "none",
+                **p,
             }
 
         survivors = list(valid)
+        methods_used = []
 
-        # Deterministic pruning pipeline
-        p = self._extract_params(params)
+        # ---------------------------------------------------------------------
+        # Dynamic pruning dispatch
+        # ---------------------------------------------------------------------
+        for param_name, method_name in self.PRUNING_METHODS.items():
+            value = p.get(param_name)
+            if value is None:
+                continue
 
-        if p["rmsd_threshold"] is not None:
-            survivors = self._prune_rmsd(survivors, p["rmsd_threshold"])
+            prune_fn = getattr(self, method_name)
+            before = len(survivors)
 
-        if p["energy_window"] is not None:
-            survivors = self._prune_energy_window(survivors, p["energy_window"])
+            # Slice requires two parameters
+            if param_name == "n_start":
+                survivors = prune_fn(survivors, p["n_start"], p["n"])
+            else:
+                survivors = prune_fn(survivors, value)
 
-        if p["max_energy"] is not None:
-            survivors = self._prune_max_energy(survivors, p["max_energy"])
+            after = len(survivors)
+            methods_used.append(f"{param_name} ({before}→{after})")
 
-        if p["percentile"] is not None:
-            survivors = self._prune_percentile(survivors, p["percentile"])
+        # Ensure survivors exist
+        if not survivors:
+            self.warnings["molecules_all_pruned"] += 1
+            msg = f"All conformers pruned for {inchi_key}"
+            self.log(f"[WARNING] {msg}")
+            if self.strict_mode:
+                raise RuntimeError(msg)
 
-        if p["n"] is not None:
-            survivors = self._prune_keep_lowest_n(survivors, p["n"])
-
-        if p["n_high"] is not None:
-            survivors = self._prune_keep_highest_n(survivors, p["n_high"])
-
-        if p["n_start"] is not None and p["n"] is not None:
-            survivors = self._prune_slice(survivors, p["n_start"], p["n"])
+        survivors = sorted(survivors, key=lambda c: (c.energy, c.lookup_id))
 
         summary_row = {
             "inchi_key": inchi_key,
@@ -142,63 +224,85 @@ class PruningStage(BaseStage):
             "valid_energy_conformers": len(valid),
             "removed_missing_energy": removed_missing_energy,
             "kept_after_pruning": len(survivors),
+            "methods_used": "; ".join(methods_used) if methods_used else "none",
             **p,
         }
 
         return survivors, summary_row
 
-    # ------------------------------------------------------------
-    # Parameter extraction
-    # ------------------------------------------------------------
-    def _extract_params(self, params):
-        return {
-            "rmsd_threshold": self._get_float(params, "rmsd_threshold"),
-            "energy_window": self._get_float(params, "energy_window"),
-            "max_energy": self._get_float(params, "max_energy"),
-            "percentile": self._get_float(params, "percentile"),
-            "n": self._get_int(params, "n"),
-            "n_high": self._get_int(params, "n_high"),
-            "n_start": self._get_int(params, "n_start"),
-        }
-
-    # ------------------------------------------------------------
-    # Strategy helpers (unchanged)
-    # ------------------------------------------------------------
-    def _get_float(self, params, key):
-        if key not in params:
-            return None
-        try:
-            return float(params[key])
-        except Exception:
-            self.log(f"[WARNING] Invalid float for {key}: {params[key]} (ignored)")
+    # -------------------------------------------------------------------------
+    # Energy conversion
+    # -------------------------------------------------------------------------
+    def _convert_energy(self, energy_hartree, units):
+        if energy_hartree is None:
             return None
 
-    def _get_int(self, params, key):
-        if key not in params:
-            return None
-        try:
-            return int(params[key])
-        except Exception:
-            self.log(f"[WARNING] Invalid int for {key}: {params[key]} (ignored)")
-            return None
+        units = units.lower()
 
-    # ------------------------------------------------------------
-    # Pruning strategies (unchanged)
-    # ------------------------------------------------------------
+        if units == "hartree":
+            return energy_hartree
+        if units == "kcal":
+            return energy_hartree * HARTREE_TO_KCAL
+        if units == "kJ" or units == "kj":
+            return energy_hartree * HARTREE_TO_KJ
+
+        self.log(f"[WARNING] Unknown energy units '{units}', assuming hartree")
+        return energy_hartree
+
+    # -------------------------------------------------------------------------
+    # Pruning methods
+    # -------------------------------------------------------------------------
     def _prune_rmsd(self, conformers, rmsd_threshold):
-        self.log(
-            f"[WARNING] RMSD pruning (rmsd_threshold={rmsd_threshold}) not implemented; keeping all conformers"
-        )
-        return conformers
+        if not conformers or rmsd_threshold <= 0:
+            return conformers
 
-    def _prune_energy_window(self, conformers, energy_window):
+        sorted_conf = sorted(conformers, key=lambda c: c.energy)
+        survivors = []
+        survivor_mols = []
+
+        for rec in sorted_conf:
+            try:
+                mol = Chem.MolFromXYZFile(rec.xyz_path)
+                if mol is None:
+                    self.log(f"[WARNING] Could not load XYZ for RMSD pruning: {rec.lookup_id}")
+                    continue
+            except Exception as e:
+                self.log(f"[WARNING] Failed to parse XYZ for {rec.lookup_id}: {e}")
+                continue
+
+            too_close = False
+            for sm in survivor_mols:
+                rms = rdMolAlign.GetBestRMS(mol, sm)
+                if rms < rmsd_threshold:
+                    too_close = True
+                    break
+
+            if not too_close:
+                survivors.append(rec)
+                survivor_mols.append(mol)
+
+        self.log(
+            f"[INFO] RMSD pruning (threshold={rmsd_threshold} Å): "
+            f"{len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
+    def _prune_energy_window(self, conformers, energy_window, units="kcal"):
         if not conformers:
             return conformers
-        energies = np.array([c.energy for c in conformers], dtype=float)
-        min_e = float(energies.min())
-        survivors = [c for c in conformers if (c.energy - min_e) <= energy_window]
+
+        converted = np.array([
+            self._convert_energy(c.energy, units) for c in conformers
+        ], dtype=float)
+
+        min_e = float(converted.min())
+        survivors = [
+            c for c, e in zip(conformers, converted)
+            if (e - min_e) <= energy_window
+        ]
+
         self.log(
-            f"[INFO] Energy window pruning (ΔE <= {energy_window}): "
+            f"[INFO] Energy window pruning (ΔE <= {energy_window} {units}): "
             f"{len(conformers)} → {len(survivors)}"
         )
         return survivors
@@ -263,9 +367,9 @@ class PruningStage(BaseStage):
         )
         return survivors
 
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Output writing
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def _write_outputs(self, pruned_set: ConformerSet, summary_rows):
         outputs_dir = self.outputs_dir
 
@@ -277,21 +381,40 @@ class PruningStage(BaseStage):
         summary_path = os.path.join(outputs_dir, "pruning_summary.csv")
         df = pd.DataFrame(summary_rows)
 
+        # Human-readable column names
+        df = df.rename(columns={
+            "inchi_key": "Molecule",
+            "total_conformers": "Total Conformers",
+            "valid_energy_conformers": "With Valid Energy",
+            "removed_missing_energy": "Removed (Missing Energy)",
+            "kept_after_pruning": "Final Count",
+            "methods_used": "Pruning Steps Applied",
+            "rmsd_threshold": "RMSD Threshold (Å)",
+            "energy_window": "Energy Window",
+            "max_energy": "Max Energy",
+            "percentile": "Percentile Cutoff",
+            "n": "Keep Lowest N",
+            "n_high": "Keep Highest N",
+            "n_start": "Slice Start",
+        })
+
         cols = [
-            "inchi_key",
-            "total_conformers",
-            "valid_energy_conformers",
-            "removed_missing_energy",
-            "kept_after_pruning",
-            "rmsd_threshold",
-            "energy_window",
-            "max_energy",
-            "percentile",
-            "n",
-            "n_high",
-            "n_start",
+            "Molecule",
+            "Total Conformers",
+            "With Valid Energy",
+            "Removed (Missing Energy)",
+            "Final Count",
+            "Pruning Steps Applied",
+            "RMSD Threshold (Å)",
+            "Energy Window",
+            "Max Energy",
+            "Percentile Cutoff",
+            "Keep Lowest N",
+            "Keep Highest N",
+            "Slice Start",
         ]
-        df = df[cols]
+
+        df = df.reindex(columns=cols)
 
         with AtomicWriter(summary_path) as f:
             df.to_csv(f, index=False)
@@ -299,9 +422,9 @@ class PruningStage(BaseStage):
         self.log(f"Pruned energies written to: {energies_path}")
         self.log(f"Pruning summary written to: {summary_path}")
 
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Warning summary
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def _log_warning_summary(self):
         total = sum(self.warnings.values())
         if total == 0:
@@ -313,4 +436,9 @@ class PruningStage(BaseStage):
             self.log(
                 " - Molecules with all conformers missing energy: "
                 f"{self.warnings['molecules_all_missing_energy']}"
+            )
+        if self.warnings["molecules_all_pruned"] > 0:
+            self.log(
+                " - Molecules with all conformers pruned: "
+                f"{self.warnings['molecules_all_pruned']}"
             )

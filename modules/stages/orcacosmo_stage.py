@@ -123,10 +123,8 @@ class OrcacosmoStage(BaseStage):
         self.strict_mode = bool(cfg.get("cosmo", {}).get("strict", False))
 
         # Determine max parallel processes for ORCA (%pal nprocs)
-        # Option B: maximise resources for the job, but never exceed actual cores
         max_procs = None
 
-        # Try job.resources.cpus if BaseStage exposes it
         resources = getattr(self, "resources", None)
         if resources is not None and getattr(resources, "cpus", None):
             try:
@@ -134,7 +132,6 @@ class OrcacosmoStage(BaseStage):
             except Exception:
                 max_procs = None
 
-        # Fallback to parameters["resources"]["cpus"] if present
         if max_procs is None:
             params = getattr(self, "parameters", {}) or {}
             try:
@@ -142,15 +139,16 @@ class OrcacosmoStage(BaseStage):
             except Exception:
                 max_procs = None
 
-        # Final fallback: use local machine core count
         if not max_procs or max_procs <= 0:
             max_procs = os.cpu_count() or 1
 
-        # Never request more than physically available cores
         physical_cores = os.cpu_count() or 1
         self.max_procs = max(1, min(max_procs, physical_cores))
 
-        self.log(f"[INFO] ORCA parallel nprocs set to {self.max_procs} (requested={max_procs}, physical={physical_cores})")
+        self.log(
+            f"[INFO] ORCA parallel nprocs set to {self.max_procs} "
+            f"(requested={max_procs}, physical={physical_cores})"
+        )
 
         # ORCA version (best-effort)
         self.orca_version = "unknown"
@@ -257,7 +255,6 @@ class OrcacosmoStage(BaseStage):
         self.item_to_lookup[item_num] = lookup_id
         self.item_index += 1
         return item_num
-
 
     def _handle_failure(self, lookup_id, e):
         self.log(f"[ERROR] {lookup_id}: {e}")
@@ -416,16 +413,15 @@ class OrcacosmoStage(BaseStage):
         env = os.environ.copy()
         orca_dir = os.path.dirname(self.orca_command)
         env["LD_LIBRARY_PATH"] = f"{orca_dir}:{env.get('LD_LIBRARY_PATH','')}"
-        
+
         # Set OpenMP threads for parallelization
         env["OMP_NUM_THREADS"] = str(self.max_procs)
-        
+
         # Disable MPI to avoid slot allocation issues
-        # Remove any MPI-related environment variables
         for key in list(env.keys()):
             if 'OMPI' in key or 'MPI' in key or 'PRTE' in key:
                 del env[key]
-        
+
         self.log(f"[INFO] Running ORCA with OMP_NUM_THREADS={self.max_procs}")
 
         with open(log_path, "w") as f:
@@ -612,7 +608,6 @@ class OrcacosmoStage(BaseStage):
         original["cosmo"] = cosmo_block
         self.successful_outputs.append(original)
 
-
     # ------------------------------------------------------------
     # Summary writer (big JSON + CSV + mapping)
     # ------------------------------------------------------------
@@ -644,15 +639,23 @@ class OrcacosmoStage(BaseStage):
         if rows:
             pd.DataFrame(rows).to_csv(summary_csv, index=False)
 
-        self.log(f"Wrote ORCA COSMO results JSON with {len(self.successful_outputs)} entries: {results_path}")
-        self.log(f"Wrote item-to-lookup mapping with {len(self.item_to_lookup)} entries: {mapping_path}")
+        self.log(
+            f"Wrote ORCA COSMO results JSON with {len(self.successful_outputs)} entries: {results_path}"
+        )
+        self.log(
+            f"Wrote item-to-lookup mapping with {len(self.item_to_lookup)} entries: {mapping_path}"
+        )
         if rows:
             self.log(f"Wrote ORCA COSMO summary CSV: {summary_csv}")
 
-        self.log(f"Stage elapsed time: {stage_end - stage_start:.2f} s "
-                f"(successful={self.stats['successful']}, failed={self.stats['failed']})")
+        self.log(
+            f"Stage elapsed time: {stage_end - stage_start:.2f} s "
+            f"(successful={self.stats['successful']}, failed={self.stats['failed']})"
+        )
 
-
+    # ------------------------------------------------------------
+    # Append lightweight summary entry
+    # ------------------------------------------------------------
     def _append_summary_entry(self, lookup_id, inchi_key, orcacosmo_path, method_used, fallback_triggered):
         """Append a lightweight summary entry as each item finishes."""
         summary_path = os.path.join(self.outputs_dir, "orcacosmo_summary.json")
@@ -674,7 +677,6 @@ class OrcacosmoStage(BaseStage):
 
         with AtomicWriter(summary_path) as f:
             json.dump(data, f, indent=2)
-
 
     # ------------------------------------------------------------
     # CPCM validation
@@ -718,7 +720,9 @@ class OrcacosmoStage(BaseStage):
         self.log(f"Missing XYZ: {self.stats['missing_xyz']}")
         self.log_header("End ORCA COSMO Summary")
 
-
+    # ------------------------------------------------------------
+    # Logging helpers
+    # ------------------------------------------------------------
     def log_item(self, item_num, total, message):
         """Top‑level item log, includes item counter."""
         self.log(f"[item{item_num:03d} {item_num+1}/{total}] {message}")

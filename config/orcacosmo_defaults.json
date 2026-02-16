@@ -1,5 +1,8 @@
 {
-  "strict": false,
-  "enable_tzvp_fallback": true,
-  "maxcore": 2000
+  "default_basis": "TZVPD",
+  "fallback_basis": "TZVP",
+  "functional": "BP86",
+  "solvation": "CPCM",
+  "maxcore": 2000,
+  "strict": false
 }

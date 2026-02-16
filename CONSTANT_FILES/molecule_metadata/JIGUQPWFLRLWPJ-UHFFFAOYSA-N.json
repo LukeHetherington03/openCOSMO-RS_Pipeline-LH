@@ -76,17 +76,17 @@
   "Bertz_complexity": 76.14933958998697,
   "molar_refractivity": 26.829999999999988,
   "provenance": {
-    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acrylate_initiator_set_1.csv",
-    "cleaning_timestamp": "2026-02-10T21:33:36.004406Z",
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv",
+    "cleaning_timestamp": "2026-02-16T15:56:46.152945Z",
     "pipeline_version": "unknown",
-    "generated_by_request": "R-10Feb26-2133-35691-overwrite_metadata",
-    "generated_by_job": "J-10Feb26-2133-35692-cleaning"
+    "generated_by_request": "R-16Feb26-1556-45823-new_run",
+    "generated_by_job": "J-16Feb26-1556-45824-cleaning"
   },
-  "melting_temp": "202.15",
+  "melting_temp": 202.15,
   "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
   "Gfus_mode": "MyrdalYalkowsky",
   "formula_calcd": "",
   "anionic": false,
-  "experimental_solubility_mol_frac": 0.003264508
+  "experimental_solubility_mol_frac": 0.0032645076157284
 }

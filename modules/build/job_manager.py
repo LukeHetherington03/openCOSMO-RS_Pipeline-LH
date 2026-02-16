@@ -334,3 +334,7 @@ class Job:
 
     def get_job_id(self):
         return self.job_id
+
+    def is_resuming(self):
+        """Return True if this job has pending items from a previous run."""
+        return bool(self.pending_items)
