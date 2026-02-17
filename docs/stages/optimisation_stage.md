@@ -1,232 +1,337 @@
-# Stage: Optimisation
+# Optimisation Stage  
+openCOSMO‑RS Pipeline
 
-## Purpose
-The OptimisationStage performs geometry optimisation on each conformer using a selected quantum or semi‑empirical backend.
+The Optimisation Stage performs geometry optimisation on each conformer using one of several supported quantum‑chemical or semi‑empirical engines.  
+It consumes the conformer set produced by the Generation or Pruning stages and produces a fully optimised `energies.json` with detailed provenance and timing information.
 
-It consumes a canonical `energies.json` (from Generation or Pruning) and produces:
-
-- updated `energies.json` with optimisation provenance,
-- optimised XYZ geometries,
-- a human‑readable `optimisation_summary.csv`,
-- a conformer‑level `summary.csv`,
-- an updated `job_state.json`.
-
-This stage never modifies molecule‑level metadata.
+This document describes the Optimisation Stage in detail for both users and developers.
 
 ---
 
-## Inputs
+# 1. Purpose
 
-### Required
+The Optimisation Stage:
 
-#### `inputs/energies.json`
-A canonical conformer store produced by Generation or Pruning.
+- Reads `energies.json` from Generation or Pruning  
+- Loads engine defaults and engine registry from config  
+- Performs geometry optimisation using ORCA, gXTB, XTB, or a forcefield placeholder  
+- Tracks convergence, energies, and timing  
+- Writes per‑iteration XYZ files and logs  
+- Supports resume and checkpointing  
+- Produces a canonical optimised `energies.json`  
+- Writes an optional human‑readable summary  
 
-Each entry must match the `ConformerRecord` schema:
+It is the final geometry refinement step before ORCA COSMO or solubility prediction.
+
+---
+
+# 2. Canonical Input & Output
+
+### **Input**
+The stage requires:
+
+```
+stage_input = energies.json
+```
+
+This file is copied into:
+
+```
+jobs/J-.../inputs/energies.json
+```
+
+for reproducibility.
+
+### **Output**
+The stage declares its canonical output:
+
+```
+energies.json
+```
+
+and also writes:
+
+```
+xyz/<lookup_id>_optN.xyz
+log/<lookup_id>_optN.log
+checkpoints/<lookup_id>.json
+optimisation_summary.csv  (optional)
+```
+
+These appear under:
+
+```
+jobs/J-.../outputs/
+```
+
+---
+
+# 3. Parameters
+
+The Optimisation Stage merges:
+
+1. Engine defaults (`optimisation.defaults`)  
+2. Engine registry (`optimisation.engines`)  
+3. User overrides (`pipeline_spec`)  
+
+Supported parameters include:
+
+| Parameter | Type | Description |
+|----------|------|-------------|
+| `engine` | str | Engine name from registry |
+| `level` | str | `"loose"`, `"normal"`, `"tight"`, `"vtight"` |
+| `max_iter` | int | Max optimisation iterations |
+| `gfn` | int | GFN level for XTB/gXTB |
+| `keep_scratch` | bool | Keep scratch directories |
+| `resume` | bool | Resume from checkpoints |
+| `global_fail_threshold` | float | Abort if failure ratio exceeds threshold |
+
+---
+
+# 4. Strict Mode
+
+Strict mode is enabled via:
 
 ```json
-{
-  "lookup_id": "BQJCRH..._conf000",
-  "inchi_key": "BQJCRHHNABKAKU-KBQPJGBKSA-N",
-  "conf_num": 0,
-  "xyz_path": "xyz/BQJCRH..._conf000.xyz",
-  "energy": -12.345,
-  "smiles": "CC(O)COC(=O)C=C",
-  "provenance": { ... }
-}
+"optimisation": { "strict": true }
+```
+
+Strict mode enforces:
+
+- Missing XYZ → fail  
+- Backend failures → fail  
+- All conformers unusable → fail  
+
+Without strict mode, these become warnings and the conformer is skipped.
+
+---
+
+# 5. Execution Flow
+
+The Optimisation Stage follows this sequence:
+
+1. **Load energies.json**  
+2. **Load engine defaults and registry**  
+3. **Merge parameters**  
+4. **Determine engine family**  
+5. **Resume or start fresh**  
+6. **Prepare XYZ inputs**  
+7. **Optimise each conformer**  
+8. **Write checkpoints**  
+9. **Merge checkpoints into final energies.json**  
+10. **Write summary**  
+
+---
+
+# 6. Resume & Checkpointing
+
+The stage supports robust resume:
+
+- Each conformer has a unique `lookup_id`  
+- Each optimisation iteration writes a checkpoint:  
+  ```
+  outputs/checkpoints/<lookup_id>.json
+  ```
+- If the stage is interrupted, resume picks up only pending conformers  
+- Checkpoints are merged at the end into the final `energies.json`  
+
+This ensures deterministic recovery and safe HPC operation.
+
+---
+
+# 7. Input Preparation
+
+The stage copies all XYZ files into:
+
+```
 inputs/xyz/
-Directory containing all XYZ files referenced in energies.json.
+```
 
-Parameters (args)
-All parameters are optional unless stated.
+Missing XYZ files are logged and skipped.  
+If no valid conformers remain, the stage fails.
 
-Parameter	Type	Default	Description
-engine	string	"gxtb"	Optimisation backend (xtb, gxtb, orca, orca_fast, orca_final, forcefield)
-level	string	"normal"	Normalised optimisation level: loose, normal, tight, vtight
-max_iter	int	250	Maximum optimisation iterations (XTB/gXTB)
-global_fail_threshold	float	0.8	Abort if this fraction of conformers fail
-strict (config)	bool	false	If true, any fatal issue aborts the stage
-Normalised Optimisation Levels
-The stage exposes a unified optimisation vocabulary:
+---
 
-Code
-loose
-normal
-tight
-vtight
-gXTB mapping
-Level	Flag
-loose	--opt loose
-normal	--opt
-tight	--opt tight
-vtight	--opt vtight
-XTB mapping
-Level	Iterations
-loose	100
-normal	250
-tight	500
-vtight	1000
-ORCA mapping
-Level	Keyword
-loose	LooseOpt
-normal	Opt
-tight	TightOpt
-vtight	VeryTightOpt
-Forcefield
-No effect — placeholder optimisation.
+# 8. Engine Selection
 
-Processing Logic
-1. Load conformers
-Read energies.json into a ConformerSet.
+The engine is selected from:
 
-Validate schema.
+```
+optimisation.engines
+```
 
-Group conformers by molecule.
+Each engine entry defines:
 
-2. Prepare XYZs
-Copy all XYZs into inputs/xyz/.
+- `family` (orca, gxtb, xtb, forcefield)  
+- Default optimisation level  
+- Method/basis (ORCA)  
+- GFN level (XTB/gXTB)  
+- CPCM/ALPB settings (ORCA)  
 
-Track missing XYZs.
+The stage then dispatches to the appropriate backend.
 
-If all XYZs missing → fail.
+---
 
-3. Optimise each conformer
-For each conformer:
+# 9. Backends
 
-Run backend (XTB/gXTB/ORCA/forcefield).
+The stage supports four backend families.
 
-Parse log file (energy, convergence, iterations).
+---
 
-Validate energy sanity.
+## 9.1 ORCA Backend (Fully Functional)
 
-Normalise XYZ filename → <lookup_id>_opt.xyz.
+The ORCA backend:
 
-Compute:
+- Writes a full `.inp` file  
+- Supports:
+  - LooseOpt / Opt / TightOpt / VeryTightOpt  
+  - CPCM (default or custom radii)  
+  - ALPB solvation  
+  - Arbitrary method/basis from engine registry  
+- Runs ORCA via subprocess  
+- Copies `<lookup>.xyz` to output directory  
+- Parses logs using `ORCALogParser`  
 
-convergence quality,
+### Failure modes
 
-success score,
+- ORCA executable missing  
+- ORCA returns non‑zero exit code  
+- Final XYZ missing  
+- Parser fails  
 
-geometry version,
+Strict mode converts warnings into errors.
 
-last_modified timestamp.
+---
 
-Record warnings.
+## 9.2 gXTB Backend (Fully Functional)
 
-Update ConformerRecord.provenance["optimisation"].
+The gXTB backend:
 
-4. Global failure threshold
-If failures exceed global_fail_threshold, abort optimisation early.
+- Uses XTB as the driver  
+- Uses gXTB for gradients  
+- Builds a driver string:  
+  ```
+  gxtb -grad -c xtbdriver.xyz
+  ```
+- Supports loose/normal/tight/vtight optimisation  
+- Uses 80% of available CPU cores  
+- Writes `xtbopt.xyz` as output  
 
-5. Usability filtering
-A conformer is usable if:
+### Failure modes
 
-XYZ exists,
+- Missing XTB or gXTB executables  
+- Missing `xtbopt.xyz`  
+- Non‑zero exit code  
 
-energy is finite (if converged),
+---
 
-status is converged or partial.
+## 9.3 Classic XTB Backend (Fully Functional)
 
-If all conformers unusable → fail.
+The classic XTB backend:
 
-Outputs
-All outputs are written to outputs/.
+- Runs XTB directly  
+- Supports GFN levels  
+- Iteration count depends on optimisation level  
+- Writes `xtbopt.xyz`  
 
-1. outputs/xyz/<lookup_id>_opt.xyz
-Optimised geometries with normalised filenames.
+### Failure modes
 
-2. outputs/summary.csv
-Conformer‑level table:
+- Missing XTB executable  
+- Missing output XYZ  
+- Non‑zero exit code  
 
-| lookup_id | inchi_key | conf_num | energy | status | quality | success_score | xyz_path | log_path | elapsed_seconds |
+---
 
-3. outputs/optimisation_summary.csv
-Molecule‑level summary:
+## 9.4 Forcefield Backend (Placeholder)
 
-| molecule_id | n_atoms | n_conformers_attempted | n_conformers_output | n_converged | n_failed | n_partial | avg_time_per_conf_s | total_time_s | engine | level |
+A simple placeholder backend:
 
-4. outputs/energies.json
-Canonical conformer store with updated optimisation provenance.
+- Copies input XYZ to output  
+- Writes a minimal log  
+- Does not perform optimisation  
 
-Example provenance block:
+Useful for debugging or pipeline testing.
 
-json
-"optimisation": {
-  "engine": "gxtb",
-  "level": "tight",
-  "status": "converged",
-  "energy": -13.456,
-  "xyz_path": "xyz/BQJCRH..._conf000_opt.xyz",
-  "log_path": "log/BQJCRH..._gxtb.log",
-  "elapsed_seconds": 12.3,
-  "parser": {
-    "iterations": 45,
-    "converged": true,
-    "elapsed_seconds": 11.9
-  },
-  "backend_meta": { ... },
-  "engine_command": "...",
-  "backend_version": "gXTB 6.5.1",
-  "warnings": [],
-  "convergence_quality": "very_good",
-  "success_score": 0.8,
-  "geometry_version": 1,
-  "last_modified": "2026-02-01T23:40:00Z"
+---
+
+# 10. Log Parsing
+
+The stage uses:
+
+```
+ORCALogParser
+XTBLogParser
+GxTBLogParser
+```
+
+Each parser extracts:
+
+- Convergence status  
+- Final energy  
+- Additional metadata (if available)  
+
+If parsing fails, the stage logs a warning and marks the conformer as partial.
+
+---
+
+# 11. Status Determination
+
+A conformer is considered:
+
+- **converged** → parser says converged AND XYZ exists  
+- **partial** → parser says converged but XYZ missing  
+- **failed** → parser says not converged  
+
+This status is recorded in the optimisation history.
+
+---
+
+# 12. Energy Validation
+
+Energy is considered invalid if:
+
+- `None`  
+- `NaN`  
+- `abs(energy) > 1e6`  
+
+Invalid energies are replaced with `None`.
+
+---
+
+# 13. Optimisation History
+
+Each conformer accumulates a history:
+
+```
+{
+  "stage": "optimisation",
+  "engine": "...",
+  "level": "...",
+  "status": "...",
+  "energy": ...,
+  "xyz_path": "...",
+  "log_path": "...",
+  "elapsed_seconds": ...,
+  "timing": {...},
+  "backend_meta": {...},
+  "timestamp": "..."
 }
-5. job_state.json
-Updated with:
+```
 
-stage name,
+This provides full provenance for downstream analysis.
 
-engine,
+---
 
-level,
+# 14. Global Failure Threshold
 
-counts,
+If the fraction of failed conformers exceeds:
 
-elapsed time.
+```
+global_fail_threshold
+```
 
-Warning Summary (logged)
-At the end of the stage, the log prints:
+(default: 0.8)
 
-Code
-========== Optimisation Summary ==========
-Converged: X
-Partial: Y
-Failed: Z
-Missing XYZ: N
-==========================================
-Failure Modes
-The stage fails if:
+the stage aborts early.
 
-energies.json missing or invalid,
-
-all XYZs missing,
-
-all conformers unusable,
-
-strict mode enabled and any fatal error occurs,
-
-global failure threshold exceeded.
-
-Guarantees
-Conformer identity is preserved (lookup_id, inchi_key, conf_num).
-
-Only geometry and energy fields are updated.
-
-Provenance is always appended, never overwritten.
-
-Output energies.json is canonical and schema‑consistent.
-
-XYZ filenames are normalised.
-
-Molecule‑level metadata is never modified.
-
-Versioning
-The stage increments:
-
-geometry_version per conformer,
-
-last_modified timestamp.
-
-This ensures reproducibility and traceability.
+This prevents wasting compute on hopeless cases

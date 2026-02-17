@@ -1,159 +1,351 @@
-# Stage: Pruning
+# Pruning Stage  
+openCOSMO‑RS Pipeline
 
-## Purpose
-Reduce the number of conformers per molecule according to energy‑ and geometry‑based criteria, while preserving conformer identity and schema.
+The Pruning Stage reduces the number of conformers per molecule by applying configurable pruning rules.  
+It consumes the conformer set produced by the Generation or Optimisation stages and outputs a smaller, cleaner, and more physically meaningful conformer ensemble.
 
-This stage:
-- removes invalid or missing energies,
-- applies pruning operations in a deterministic order,
-- preserves all conformer metadata,
-- writes a pruned `energies.json` and a molecule‑level pruning summary.
-
-No geometry optimisation is performed here.
+This document describes the Pruning Stage in detail for both users and developers.
 
 ---
 
-## Inputs
+# 1. Purpose
 
-### Primary input
-`energies.json` from GenerationStage or a previous PruningStage.
+The Pruning Stage:
 
-If `energies_file` is not provided, the stage auto‑detects:
+- Reads `energies.json` from Generation or Optimisation  
+- Groups conformers by molecule (InChIKey)  
+- Removes invalid or missing‑energy conformers  
+- Applies user‑defined pruning rules  
+- Writes a canonical pruned `energies.json`  
+- Writes a `pruning_summary.csv`  
+- Tracks warnings and strict‑mode failures  
 
-- `inputs/energies.json`
-- `outputs/energies.json`
-
-### Expected schema (per conformer)
-Each entry must match the canonical `ConformerRecord` schema:
-
-- `lookup_id` — composite key `"{inchi_key}_conf{conf_num:03d}"`
-- `inchi_key` — molecule identity
-- `conf_num` — integer conformer index
-- `xyz_path` — path to XYZ file
-- `energy` — float or null
-- `smiles` — canonical SMILES
-- `provenance` — dict (backend, seed, timestamps, etc.)
+It is the final step before geometry optimisation (if pruning follows generation) or before ORCA COSMO (if pruning follows optimisation).
 
 ---
 
-## Arguments (`args`)
+# 2. Canonical Input & Output
 
-All pruning arguments are optional.  
-If none are provided, only missing‑energy removal is applied.
+### **Input**
+The stage requires:
 
-### Energy‑based pruning
-- `energy_window: float`  
-  Keep conformers within ΔE of the minimum energy.
+```
+stage_input = energies.json
+```
 
-- `max_energy: float`  
-  Drop conformers with `energy > max_energy`.
+This file is copied into:
 
-- `percentile: float`  
-  Keep conformers with energy ≤ the given percentile cutoff.
+```
+jobs/J-.../inputs/energies.json
+```
 
-- `n: int`  
-  Keep the lowest N energies.  
-  Also used with `n_start` for slicing.
+for reproducibility.
 
-- `n_high: int`  
-  Keep the highest N energies.
+### **Output**
+The stage declares its canonical output:
 
-### Geometry‑based pruning
-- `rmsd_threshold: float`  
-  RMSD clustering (currently a placeholder; logs and keeps all).
+```
+energies.json
+```
 
-### Index‑based slicing
-- `n_start: int`  
-  Slice start index (supports negative indices).  
-  Used together with `n`.
+and also writes:
 
-Examples:
-- `n_start = 10, n = 5` → keep indices 10–14  
-- `n_start = -1, n = 5` → keep last 5 conformers  
+```
+pruning_summary.csv
+```
 
-### Strict mode
-`config["pruning"]["strict"] = True`
+These appear under:
 
-If a molecule has **all conformers missing energy**, the stage raises and fails.
+```
+jobs/J-.../outputs/
+```
 
 ---
 
-## Processing
+# 3. Parameters
 
-### 1. Group conformers by molecule (`inchi_key`)
+The Pruning Stage supports a rich set of pruning parameters.  
+All are optional — the user may specify any combination.
 
-### 2. Remove missing energies
-Drop conformers where:
-- `energy is None`, or
-- `energy` is `NaN`.
+| Parameter | Type | Description |
+|----------|------|-------------|
+| `keep_all` | bool | Skip pruning entirely |
+| `rmsd_threshold` | float | RMSD‑based pruning (Å) |
+| `energy_window` | float | Keep conformers within ΔE of minimum |
+| `max_energy` | float | Keep conformers with E ≤ max_energy |
+| `percentile` | float | Keep conformers below percentile cutoff |
+| `n` | int | Keep lowest‑energy N conformers |
+| `n_high` | int | Keep highest‑energy N conformers |
+| `n_start` | int | Slice start index (paired with `n`) |
 
-If all conformers are removed:
-- log an error,
-- increment `molecules_all_missing_energy`,
-- in strict mode → fail,
-- in non‑strict mode → skip pruning for that molecule.
-
-### 3. Apply pruning operations in deterministic order
-If the corresponding arguments are present:
-
-1. `rmsd_threshold` → RMSD pruning (placeholder)
-2. `energy_window` → keep within ΔE of minimum
-3. `max_energy` → keep `energy <= max_energy`
-4. `percentile` → keep `energy <= percentile cutoff`
-5. `n` → keep lowest N energies
-6. `n_high` → keep highest N energies
-7. `n_start + n` → slice by index (supports negative `n_start`)
-
-### 4. Build pruning summary row
-For each molecule:
-
-- `inchi_key`
-- `total_conformers`
-- `valid_energy_conformers`
-- `removed_missing_energy`
-- `kept_after_pruning`
-- all pruning args used
+Parameters are applied **in the order defined in the registry**, allowing complex pruning pipelines.
 
 ---
 
-## Outputs
+# 4. Strict Mode
 
-### `energies.json` (pruned)
-Same schema as input, but with fewer conformers.  
-All conformer fields (`lookup_id`, `inchi_key`, `conf_num`, `xyz_path`, `smiles`, `provenance`) are preserved.
+Strict mode is enabled via:
 
-### `pruning_summary.csv`
-One row per molecule:
+```json
+"pruning": { "strict": true }
+```
 
-- `inchi_key`
-- `total_conformers`
-- `valid_energy_conformers`
-- `removed_missing_energy`
-- `kept_after_pruning`
-- `rmsd_threshold`
-- `energy_window`
-- `max_energy`
-- `percentile`
-- `n`
-- `n_high`
-- `n_start`
+Strict mode enforces:
+
+- Missing energies → fail  
+- All conformers pruned → fail  
+- RMSD parsing failures → fail  
+
+Without strict mode, these become warnings and the molecule is skipped.
 
 ---
 
-## Guarantees
+# 5. Execution Flow
 
-- Conformer identity is preserved:
-  - `lookup_id`, `inchi_key`, `conf_num`, `xyz_path`, `smiles`, `provenance` remain unchanged.
-- Only the **set** of conformers changes, not their content.
-- Output `energies.json` remains fully compatible with OptimisationStage.
-- Missing energies are always removed or explicitly reported.
-- Pruning is deterministic and reproducible.
+The Pruning Stage follows this sequence:
+
+1. **Load energies.json**  
+2. **Group conformers by molecule**  
+3. **Track items for resume**  
+4. **For each molecule:**  
+   - Remove missing‑energy conformers  
+   - Apply pruning rules  
+   - Sort survivors  
+   - Record summary row  
+5. **Write pruned energies.json**  
+6. **Write pruning_summary.csv**  
+7. **Write warning summary**  
 
 ---
 
-## Warnings
+# 6. Dynamic Pruning Registry
 
-- Molecules with all conformers missing energy are counted and summarised.
-- RMSD pruning is currently a placeholder and logs a warning when used.
-- All warnings are summarised at the end of the stage.
+The stage uses a dynamic registry:
+
+```python
+PRUNING_METHODS = {
+    "rmsd_threshold": "_prune_rmsd",
+    "energy_window": "_prune_energy_window",
+    "max_energy": "_prune_max_energy",
+    "percentile": "_prune_percentile",
+    "n": "_prune_keep_lowest_n",
+    "n_high": "_prune_keep_highest_n",
+    "n_start": "_prune_slice",
+}
+```
+
+This allows:
+
+- Flexible pruning pipelines  
+- Arbitrary combinations of methods  
+- Clear provenance in `pruning_summary.csv`  
+
+Each method is documented below.
+
+---
+
+# 7. Missing‑Energy Filtering (Always Applied)
+
+Before any pruning rules, the stage removes conformers with:
+
+- `energy = None`
+- `energy = NaN`
+
+These are logged and counted.
+
+If **all** conformers are missing energy:
+
+- Warning is recorded  
+- Strict mode → fail  
+
+---
+
+# 8. Pruning Methods
+
+Each method receives the current list of survivors and returns a new list.
+
+### 8.1 RMSD Threshold Pruning
+
+```
+rmsd_threshold = float
+```
+
+Removes conformers whose RMSD to any already‑kept conformer is below the threshold.
+
+- Uses RDKit’s `GetBestRMS`  
+- Loads XYZ files via `Chem.MolFromXYZFile`  
+- Keeps lowest‑energy conformers first  
+
+### 8.2 Energy Window Pruning
+
+```
+energy_window = float  # default units: kcal
+```
+
+Keeps conformers with:
+
+```
+E - E_min <= energy_window
+```
+
+Energy units may be:
+
+- hartree  
+- kcal  
+- kJ  
+
+### 8.3 Max Energy Pruning
+
+```
+max_energy = float
+```
+
+Keeps conformers with:
+
+```
+E <= max_energy
+```
+
+### 8.4 Percentile Pruning
+
+```
+percentile = float
+```
+
+Keeps conformers with:
+
+```
+E <= percentile_cutoff
+```
+
+where cutoff is computed from the energy distribution.
+
+### 8.5 Keep Lowest N
+
+```
+n = int
+```
+
+Keeps the lowest‑energy N conformers.
+
+### 8.6 Keep Highest N
+
+```
+n_high = int
+```
+
+Keeps the highest‑energy N conformers.
+
+### 8.7 Slice Pruning
+
+```
+n_start = int
+n = int
+```
+
+Keeps a slice of the sorted conformer list:
+
+```
+survivors = conformers[n_start : n_start + n]
+```
+
+Supports negative indexing.
+
+---
+
+# 9. Summary Output
+
+The stage writes:
+
+```
+pruning_summary.csv
+```
+
+with columns:
+
+- Molecule  
+- Total Conformers  
+- With Valid Energy  
+- Removed (Missing Energy)  
+- Final Count  
+- Pruning Steps Applied  
+- RMSD Threshold (Å)  
+- Energy Window  
+- Max Energy  
+- Percentile Cutoff  
+- Keep Lowest N  
+- Keep Highest N  
+- Slice Start  
+
+This provides a complete audit trail of pruning decisions.
+
+---
+
+# 10. Warning System
+
+The stage tracks:
+
+- Molecules with all conformers missing energy  
+- Molecules with all conformers pruned  
+
+At the end, a summary is printed.
+
+---
+
+# 11. Failure Modes
+
+The stage fails if:
+
+- Stage input missing  
+- All conformers missing energy (strict mode)  
+- All conformers pruned (strict mode)  
+- RMSD parsing fails (strict mode)  
+- Invalid pruning parameters  
+
+Failures update:
+
+```
+pipeline_state.json
+job_state.json
+```
+
+and halt the pipeline.
+
+---
+
+# 12. Minimal Example
+
+### pipeline_spec entry
+
+```python
+{
+    "stage": "pruning",
+    "args": {
+        "rmsd_threshold": 0.5,
+        "energy_window": 3.0,
+        "n": 10
+    }
+}
+```
+
+### Running the stage
+
+```
+python3 main.py
+```
+
+---
+
+# 13. Summary
+
+The Pruning Stage:
+
+- Removes invalid conformers  
+- Applies flexible pruning rules  
+- Produces a clean, compact conformer set  
+- Writes a canonical `energies.json`  
+- Provides full provenance and summary reporting  
+- Supports strict mode for reproducibility  
+
+It is the final step before geometry optimisation or ORCA COSMO.
 

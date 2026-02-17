@@ -8,15 +8,31 @@ from modules.build.request_manager import Request
 from modules.execution.runner import PipelineRunner
 from modules.execution.queue import QueueManager
 
-from modules.utils.git_version import get_git_version
+
+# ------------------------------------------------------------
+# USER-EDITABLE CONFIGURATION
+# ------------------------------------------------------------
+
+# Parent request + job to continue from
+PARENT_REQUEST_ID = "R-17Feb26-1204-53419-orca_fast_t2"     # <-- EDIT THIS
+PARENT_JOB_ID     = "J-17Feb26-1213-10503-optimisation"     # <-- EDIT THIS
+
+# Title for the new continuation request
+NEW_TITLE = "continued_run"
+
+# Whether to enqueue instead of running directly
+USE_QUEUE = False
+
+# Define the new pipeline spec you want to run
+PIPELINE_SPEC = [
+    {"stage": "orcacosmo", "args": {}},
+    {"stage": "solubility", "args": {}},
+]
 
 
 # ------------------------------------------------------------
-# Choose execution mode
+# MAIN LOGIC
 # ------------------------------------------------------------
-USE_QUEUE = False   # Set to True to enqueue instead of running directly
-
-
 def main():
     # ------------------------------------------------------------
     # Load global paths config
@@ -28,42 +44,29 @@ def main():
     base_dir = paths["base_dir"]
 
     # ------------------------------------------------------------
-    # Use the ENTIRE paths.json as the pipeline config
+    # Parameters for the new request
     # ------------------------------------------------------------
-    config = paths
-    config["pipeline_version"] = get_git_version()
-
-    input_csv = os.path.join(base_dir, "input_data", "acr_t2.csv")
-
-    title = "no_overwrite"
-
-    pipeline_spec = [
-        {"stage": "cleaning", "args": {"input_csv": input_csv, "overwrite_metadata": False}},
-        {"stage": "generation", "args": {"engine": "rdkit", "num_confs": 10}},
-        {"stage": "pruning", "args": {"n": 1}},
-        {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
-        {"stage": "orcacosmo", "args": {}},
-        {"stage": "solubility", "args": {}},
-    ]
-
-
     parameters = {
-        "title": title,
+        "title": NEW_TITLE,
+        "config": paths,
         "resources": {"cpus": 20, "memory_gb": 64},
-        "config": config,
     }
 
     # ------------------------------------------------------------
-    # Create the Request
+    # Create continuation request
     # ------------------------------------------------------------
-    req = Request.create_new(
+    req = Request.continue_from(
         base_dir=base_dir,
-        dataset=title,
-        pipeline_spec=pipeline_spec,
+        parent_request_id=PARENT_REQUEST_ID,
+        parent_job_id=PARENT_JOB_ID,
+        dataset=NEW_TITLE,
+        pipeline_spec=PIPELINE_SPEC,
         parameters=parameters,
     )
 
-    print(f"Created Request: {req.request_id}")
+
+    print(f"Created continuation Request: {req.request_id}")
+    print(f"Continuing from: {PARENT_REQUEST_ID}/{PARENT_JOB_ID}")
 
     # ------------------------------------------------------------
     # EXECUTION MODE

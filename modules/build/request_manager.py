@@ -8,7 +8,7 @@ import socket
 import getpass
 from datetime import datetime
 
-from modules.build.log_helper import LogHelper
+from modules.utils.log_helper import LogHelper
 from modules.build.job_manager import Job
 
 
@@ -87,7 +87,7 @@ class Request:
 
     @classmethod
     def continue_from(cls, base_dir, parent_request_id, parent_job_id,
-                      dataset, pipeline_spec, parameters=None):
+                    dataset, pipeline_spec, parameters=None):
 
         parameters = parameters or {}
 
@@ -97,7 +97,7 @@ class Request:
         # Generate new request ID
         request_id = cls._generate_request_id(parameters)
 
-        # Construct Request object
+        # Construct NEW request
         request = cls(
             base_dir=base_dir,
             request_id=request_id,
@@ -111,17 +111,39 @@ class Request:
             load_existing=False,
         )
 
+        # ------------------------------------------------------------
+        # Load PARENT request + job
+        # ------------------------------------------------------------
+        parent_request = cls.load(base_dir, parent_request_id)
+        parent_job = Job.load(parent_request, parent_job_id)
+
+        prev_stage = parent_job.stage
+        prev_output_name = Job.STAGE_OUTPUTS.get(prev_stage)
+
+        if not prev_output_name:
+            raise RequestError(f"No canonical output defined for previous stage: {prev_stage}")
+
+        prev_output = os.path.join(
+            parent_request.jobs_dir,
+            parent_job_id,
+            "outputs",
+            prev_output_name
+        )
+
+        if not os.path.exists(prev_output):
+            raise RequestError(f"Expected parent output not found: {prev_output}")
+
+        # ------------------------------------------------------------
         # Logging
+        # ------------------------------------------------------------
         request.log_header(f"Request {request.request_id} created (continuation)")
-        request.log(f"User: {getpass.getuser()}")
-        request.log(f"Host: {socket.gethostname()}")
-        request.log(f"Pipeline sequence: {request.pipeline_sequence}")
-        request.log_section(f"Continuing from {parent_request_id}/{parent_job_id}")
+        request.log(f"Continuing from request={parent_request_id}, job={parent_job_id}")
+        request.log(f"Parent stage={prev_stage}, using output={prev_output_name}")
 
-        # First job uses previous job's canonical stage_output
+        # ------------------------------------------------------------
+        # First job of new pipeline
+        # ------------------------------------------------------------
         first_stage = pipeline_sequence[0]
-
-        prev_output = request.get_job_output(parent_job_id, Job.STAGE_OUTPUTS[first_stage])
         first_args = {
             **parameters,
             **stage_args[0],
@@ -138,6 +160,7 @@ class Request:
         request.log(f"Created first job: {job.job_id}")
 
         return request
+
 
     @classmethod
     def load(cls, base_dir, request_id):

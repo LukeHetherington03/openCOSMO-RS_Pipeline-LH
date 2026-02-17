@@ -6,7 +6,7 @@ import json
 import re
 from datetime import datetime
 import shutil
-from modules.build.log_helper import LogHelper
+from modules.utils.log_helper import LogHelper
 
 
 class JobError(Exception):
@@ -259,6 +259,27 @@ class Job:
             error_message=None,
             output_file=None,
         )
+
+    def retry_failed_items(self):
+        """
+        Move failed_items back into pending_items for retry.
+        """
+        if not self.failed_items:
+            return
+
+        self.pending_items.extend(self.failed_items)
+        self.failed_items = []
+
+        # Update job_state.json
+        self._write_job_state(
+            status="running",
+            created_at=None,
+            completed_at=None,
+            error_message=None,
+            output_file=None,
+        )
+
+
 
     def update_progress(self, item, success=True):
         if item in self.pending_items:

@@ -76,17 +76,17 @@
   "Bertz_complexity": 106.87060032410332,
   "molar_refractivity": 32.83679999999998,
   "provenance": {
-    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t1.csv",
-    "cleaning_timestamp": "2026-02-16T13:06:53.485801Z",
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t27.csv",
+    "cleaning_timestamp": "2026-02-17T13:49:21.833778Z",
     "pipeline_version": "unknown",
-    "generated_by_request": "R-16Feb26-1306-53081-new_run",
-    "generated_by_job": "J-16Feb26-1306-53083-cleaning"
+    "generated_by_request": "R-17Feb26-1349-21475-test_abort",
+    "generated_by_job": "J-17Feb26-1349-21476-cleaning"
   },
-  "melting_temp": 350.15,
+  "melting_temp": "350.15",
   "melting_temp_source": "Chemical book",
   "Hfus": "N/A",
   "Gfus_mode": "MyrdalYalkowsky",
   "formula_calcd": "",
   "anionic": false,
-  "experimental_solubility_mol_frac": 0.12150079896804
+  "experimental_solubility_mol_frac": 0.121500799
 }

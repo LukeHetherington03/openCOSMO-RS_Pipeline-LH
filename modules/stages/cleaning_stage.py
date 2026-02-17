@@ -300,15 +300,17 @@ class CleaningStage(BaseStage):
     
     def _write_metadata_for_frame(self, df, metadata_dir, source_file):
         from rdkit.Chem import (
-            Lipinski, rdMolDescriptors, Crippen, Descriptors, rdmolops
+            Lipinski, rdMolDescriptors, Crippen, Descriptors
         )
-        import hashlib
+
+        pipeline_version = self.config.get("pipeline_version", "unknown")
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        overwrite = self.parameters.get("overwrite_metadata", False)
 
         # ------------------------------------------------------------
         # Functional group SMARTS patterns
         # ------------------------------------------------------------
         FG_SMARTS = {
-            # Existing groups
             "is_amide": "[NX3][CX3](=[OX1])[#6]",
             "is_ester": "[CX3](=O)[OX2H0][#6]",
             "is_alcohol": "[OX2H][CX4]",
@@ -345,17 +347,6 @@ class CleaningStage(BaseStage):
         FG_PATTERNS = {k: Chem.MolFromSmarts(v) for k, v in FG_SMARTS.items()}
 
         # ------------------------------------------------------------
-        # Hash helper
-        # ------------------------------------------------------------
-        def _json_hash(obj):
-            data = json.dumps(obj, sort_keys=True).encode("utf-8")
-            return hashlib.sha256(data).hexdigest()
-
-        pipeline_version = self.config.get("pipeline_version", "unknown")
-        timestamp = datetime.utcnow().isoformat() + "Z"
-        overwrite = self.parameters.get("overwrite_metadata", False)
-
-        # ------------------------------------------------------------
         # Process each molecule
         # ------------------------------------------------------------
         for inchi_key, group in df.groupby("inchi_key"):
@@ -385,9 +376,6 @@ class CleaningStage(BaseStage):
                 logp = Crippen.MolLogP(mol)
                 aromatic_rings = rdMolDescriptors.CalcNumAromaticRings(mol)
 
-                # ------------------------------------------------------------
-                # Structural counts
-                # ------------------------------------------------------------
                 N_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "N")
                 O_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "O")
                 S_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "S")
@@ -402,26 +390,18 @@ class CleaningStage(BaseStage):
                 double_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "DOUBLE")
                 triple_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "TRIPLE")
 
-                # ------------------------------------------------------------
-                # Functional group flags & counts
-                # ------------------------------------------------------------
                 fg_flags = {}
                 fg_counts = {}
-
                 for name, patt in FG_PATTERNS.items():
                     matches = mol.GetSubstructMatches(patt)
                     fg_flags[name] = len(matches) > 0
                     fg_counts[name.replace("is_", "") + "_count"] = len(matches)
 
-                # ------------------------------------------------------------
-                # Global shape descriptors
-                # ------------------------------------------------------------
                 Fsp3 = rdMolDescriptors.CalcFractionCSP3(mol)
                 Bertz = Descriptors.BertzCT(mol)
                 molar_refractivity = Crippen.MolMR(mol)
 
             else:
-                # All None if SMILES invalid
                 rotatable_bonds = molecular_weight = heavy_atom_count = None
                 hbond_donors = hbond_acceptors = None
                 tpsa = logp = aromatic_rings = None
@@ -501,17 +481,16 @@ class CleaningStage(BaseStage):
 
             # Serialise
             meta_json = json.dumps(meta, indent=2)
-            meta_hash = _json_hash(meta)
 
             # ------------------------------------------------------------
-            # Write local metadata
+            # Write local metadata (ALWAYS)
             # ------------------------------------------------------------
             local_path = os.path.join(metadata_dir, f"{inchi_key}.json")
             with open(local_path, "w") as f:
                 f.write(meta_json)
 
             # ------------------------------------------------------------
-            # Write global metadata (with overwrite option)
+            # Write global metadata (ONLY if allowed)
             # ------------------------------------------------------------
             global_meta_dir = self.config.get("constant_files", {}).get("metadata_dir")
             if not global_meta_dir:
@@ -521,27 +500,18 @@ class CleaningStage(BaseStage):
             os.makedirs(global_meta_dir, exist_ok=True)
             global_path = os.path.join(global_meta_dir, f"{inchi_key}.json")
 
-            write_global = True
-
-            if not overwrite:
-                if os.path.exists(global_path):
-                    try:
-                        with open(global_path) as f:
-                            existing = json.load(f)
-                        if _json_hash(existing) == meta_hash:
-                            write_global = False
-                    except Exception:
-                        write_global = True
-
-            if write_global:
+            # Overwrite logic
+            if overwrite or not os.path.exists(global_path):
                 with open(global_path, "w") as f:
                     f.write(meta_json)
+
                 if overwrite:
                     self.log(f"[INFO] Global metadata overwritten: {global_path}")
                 else:
-                    self.log(f"[INFO] Global metadata updated: {global_path}")
+                    self.log(f"[INFO] Global metadata created: {global_path}")
             else:
                 self.log(f"[INFO] Global metadata unchanged: {global_path}")
+
 
 
     # ------------------------------------------------------------

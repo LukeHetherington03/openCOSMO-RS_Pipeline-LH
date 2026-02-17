@@ -1,169 +1,366 @@
-# Stage: Cleaning
+# Cleaning Stage  
+openCOSMO‑RS Pipeline
 
-## Purpose
-Normalise raw molecule data from CSV into a clean, canonical dataset and per‑molecule metadata, ready for all downstream 3D/conformer stages.
+The Cleaning Stage is the first scientific stage in the pipeline.  
+It ingests raw CSV files, standardises them, validates required fields, canonicalises SMILES, generates InChIKeys, computes extensive molecule metadata, and produces a unified dataset suitable for downstream conformer generation and optimisation.
 
-The CleaningStage:
-- standardises column names,
-- validates and canonicalises SMILES,
-- generates InChIKeys,
-- computes molecule‑level descriptors,
-- writes one metadata JSON per molecule,
-- produces a unified clean_dataset.csv.
-
-No conformers are generated here.
+This document describes the Cleaning Stage in detail for both users and developers.
 
 ---
 
-## Inputs
+# 1. Purpose
 
-### Arguments
-- `input_folder` or `input_folders` (optional)
-- `input_csv` (optional; string or list of strings)
+The Cleaning Stage:
 
-At least one CSV must be provided via folders and/or explicit paths.
+- Accepts one or more raw CSV files  
+- Normalises column names  
+- Validates required fields  
+- Canonicalises SMILES  
+- Generates InChIKeys  
+- Computes physchem descriptors  
+- Detects functional groups  
+- Writes molecule‑level metadata (local + global)  
+- Produces a unified `cleaned.csv` dataset  
 
-### Each CSV must contain
-- **SMILES** (or fuzzy‑matched equivalent)
-- **At least one name column**: `Name` or `mol_name_iupac`
+It is the foundation for all downstream stages.
 
 ---
 
-## Processing
+# 2. Canonical Input & Output
 
-### 1. Resolve input sources
-- Collect all CSV files from:
-  - `input_folder` / `input_folders`
-  - `input_csv` / list of CSVs
-- Fail if no CSVs found.
+### **Input**
+The stage accepts raw CSV files via:
 
-### 2. Standardise column names (fuzzy matching)
-Examples:
-- `"Name"` → `mol_name`
-- `"mol_name"` → `mol_name_iupac`
-- `"Melting point"` → `melting_temp`
-- `"Melting point source"` → `melting_temp_source`
-- `"Hfus"` → `Hfus`
-- `"Gfus_mode"` → `Gfus_mode`
-- etc.
+- `input_csv`
+- `input_csvs`
+- `input_folder`
+- `input_folders`
 
-### 3. Validate required fields
-- Missing `smiles` → error (fail in strict mode).
-- Missing any name field → error (fail in strict mode).
-- Missing `charge` → default to `0` with info log.
+At least one must be provided.
 
-### 4. Canonicalise SMILES
-- RDKit canonicalisation applied to all SMILES.
+### **Output**
+The stage declares its canonical output:
 
-### 5. Generate InChIKey
-- From canonical SMILES.
-- Invalid SMILES are logged and counted.
+```
+cleaned.csv
+```
 
-### 6. Compute molecule‑level descriptors (NEW)
-For each unique InChIKey:
-- `rotatable_bonds`
-- `molecular_weight`
-- `heavy_atom_count`
-- `hbond_donors`
-- `hbond_acceptors`
-- `tpsa`
-- `logp`
-- `aromatic_rings`
+and also writes:
 
-### 7. Write molecule metadata JSON
-One file per molecule:
-`molecule_metadata/<inchi_key>.json`
+```
+molecule_metadata/<inchi_key>.json
+```
 
-Metadata includes:
-- `metadata_version`
-- `inchi_key`
+These appear under:
+
+```
+jobs/J-.../outputs/
+```
+
+---
+
+# 3. Parameters
+
+The Cleaning Stage reads the following parameters from `pipeline_spec`:
+
+| Parameter | Type | Required | Description |
+|----------|------|----------|-------------|
+| `input_csv` | str or list | optional | One or more CSV files |
+| `input_folder` | str | optional | Folder containing CSV files |
+| `overwrite_metadata` | bool | optional | Whether to overwrite global metadata |
+| `stage_input` | unused | no | (Not used in this stage) |
+
+At least one of `input_csv` or `input_folder` must be provided.
+
+---
+
+# 4. Strict Mode
+
+Strict mode is enabled via:
+
+```json
+"cleaning": { "strict": true }
+```
+
+in `paths.json`.
+
+Strict mode enforces:
+
+- Missing SMILES → fail  
+- Missing name column → fail  
+
+Without strict mode, these become warnings and the file is skipped.
+
+---
+
+# 5. Execution Flow
+
+The Cleaning Stage follows this sequence:
+
+1. **Resolve input CSVs**  
+   - Accepts folders or explicit file paths  
+   - Validates existence  
+   - Writes a merged `raw_combined.csv` to job inputs  
+
+2. **Track items**  
+   Each CSV file is treated as one “item” for resume logic.
+
+3. **For each CSV file:**  
+   - Load the file  
+   - Standardise headers (fuzzy matching)  
+   - Validate required fields  
+   - Canonicalise SMILES  
+   - Generate InChIKeys  
+   - Compute metadata  
+   - Write metadata JSON files  
+   - Reorder columns  
+   - Append to combined dataset  
+
+4. **Write final cleaned dataset**  
+   - Concatenate all processed frames  
+   - Write `cleaned.csv`  
+
+5. **Write warning summary**  
+
+---
+
+# 6. Header Standardisation
+
+The stage uses fuzzy matching to map raw column names to standard names.
+
+Example:
+
+```
+"Melting Point" → "melting_temp"
+"Name" → "mol_name"
+"experimental solubility /mol frac" → "experimental_solubility_mol_frac"
+```
+
+This is implemented via:
+
+- `_normalise_header()`
+- `_fuzzy_match()`
+- `STANDARD_NAMES`
+
+---
+
+# 7. Required Fields
+
+A CSV must contain:
+
 - `smiles`
-- `mol_name`
-- `mol_name_iupac`
-- `charge`
-- `multiplicity`
-- **new descriptors** (rotatable bonds, MW, TPSA, etc.)
-- `melting_temp`
-- `melting_temp_source`
-- `Hfus`
-- `Gfus_mode`
-- `formula_calcd`
-- `anionic`
-- `provenance`:
-  - `source_file`
-  - `cleaning_timestamp`
-  - `pipeline_version`
+- `mol_name` or `mol_name_iupac`
 
-### 8. Log warnings
-- Missing melting_temp (affects solubility)
-- Invalid SMILES
-- Defaulted charge
+If `charge` is missing:
 
-A warning summary is printed at the end.
+- It is added with default value `0`
+- A warning is recorded
 
 ---
 
-## Outputs
+# 8. SMILES Canonicalisation
 
-### 1. `clean_dataset.csv`
-A unified dataset containing:
-- `key_inchi`
-- `smiles` (canonical)
-- `charge`
-- `mol_name` (if present)
-- `mol_name_iupac` (if present)
-- all other normalised fields
+SMILES are canonicalised using RDKit:
 
-**No** `lookup_id` or `conf_num` columns appear here.
+```python
+Chem.MolToSmiles(mol, canonical=True)
+```
 
-### 2. `molecule_metadata/<inchi_key>.json`
-One JSON per molecule containing:
-- `metadata_version`
-- `inchi_key`
-- `smiles`
-- `mol_name`
-- `mol_name_iupac`
-- `charge`
-- `multiplicity`
-- **rotatable_bonds**
-- **molecular_weight**
-- **heavy_atom_count**
-- **hbond_donors**
-- **hbond_acceptors**
-- **tpsa**
-- **logp**
-- **aromatic_rings**
-- `melting_temp`
-- `melting_temp_source`
-- `Hfus`
-- `Gfus_mode`
-- `formula_calcd`
-- `anionic`
-- `provenance`:
-  - `source_file`
-  - `cleaning_timestamp`
-  - `pipeline_version`
+Invalid SMILES are retained but flagged.
 
 ---
 
-## Guarantees
-- Every molecule with a valid SMILES has:
-  - a canonical SMILES,
-  - a valid InChIKey,
-  - a metadata JSON file.
-- All optional metadata fields exist (defaults applied if missing).
-- Missing melting_temp is explicitly logged and counted.
-- No conformers are generated.
-- No lookup_id or conf_num appears in metadata or clean_dataset.csv.
+# 9. InChIKey Generation
+
+For each SMILES:
+
+```python
+inchi.InchiToInchiKey(inchi.MolToInchi(mol))
+```
+
+Invalid SMILES → `inchi_key = None`.
+
+These rows are retained but logged.
 
 ---
 
-## Failure Modes
+# 10. Metadata Generation
 
-### No CSV files found
-→ Stage fails immediately.
+For each unique InChIKey, the stage computes:
 
-### Missing smiles or name fields
-- **Non‑strict mode:** row/file skipped, stage continues.
-- **Strict mode:** stage fails immediately.
+### **Physchem descriptors**
+- Rotatable bonds  
+- Exact molecular weight  
+- Heavy atom count  
+- H‑bond donors/acceptors  
+- TPSA  
+- LogP  
+- Aromatic rings  
+- Fraction sp3  
+- Bertz complexity  
+- Molar refractivity  
+
+### **Structural counts**
+- N, O, S, halogens  
+- Ring count  
+- Heterocycle count  
+- Double/triple bonds  
+
+### **Functional groups**
+Detected via SMARTS patterns:
+
+- Amide  
+- Ester  
+- Alcohol  
+- Amine  
+- Carboxylic acid  
+- Ketone  
+- Aldehyde  
+- Nitrile  
+- Acrylate  
+- Methacrylate  
+- Vinyl ether  
+- Vinyl ester  
+- Styrenic  
+- Ether  
+- Carbonate  
+- Urethane  
+- Urea  
+- Sulfonamide  
+- Sulfonate  
+- Phosphate  
+- Halogenation flags  
+
+Each group produces:
+
+- A boolean flag (`is_amide`)  
+- A count (`amide_count`)  
+
+### **Provenance block**
+Each metadata file includes:
+
+```
+source_file
+cleaning_timestamp
+pipeline_version
+generated_by_request
+generated_by_job
+```
+
+### **Local vs Global Metadata**
+- Local metadata is always written  
+- Global metadata is written only if:
+  - `overwrite_metadata=True`, or  
+  - the file does not already exist  
+
+---
+
+# 11. Warning System
+
+The stage tracks:
+
+- Missing melting temperature  
+- Invalid SMILES  
+- Defaulted charge  
+
+At the end, a summary is printed:
+
+```
+Cleaning completed with warnings:
+ - 3 molecule(s) missing melting_temp
+ - 1 invalid SMILES encountered
+ - 'charge' defaulted to 0 for 2 file(s)
+```
+
+---
+
+# 12. Failure Modes
+
+The stage fails if:
+
+- No CSV files are provided  
+- No CSV files can be read  
+- Required fields missing (strict mode)  
+- No valid rows processed  
+
+Failures update:
+
+```
+pipeline_state.json
+job_state.json
+```
+
+and halt the pipeline.
+
+---
+
+# 13. Developer Notes
+
+### **Resume Support**
+Each CSV file is treated as one “item”.  
+If the stage is interrupted:
+
+- Completed files are skipped  
+- Pending files are processed  
+- Metadata is not duplicated  
+
+### **Canonical Output**
+The stage declares:
+
+```python
+self.set_stage_output("cleaned.csv")
+```
+
+This is essential for:
+
+- Stage chaining  
+- Continuation  
+- Reproducibility  
+
+### **Global Metadata**
+Global metadata lives in:
+
+```
+CONSTANT_FILES/molecule_metadata/
+```
+
+This allows cross‑request reuse.
+
+---
+
+# 14. Minimal Example
+
+### pipeline_spec entry
+
+```python
+{
+    "stage": "cleaning",
+    "args": {
+        "input_folder": "raw_data/",
+        "overwrite_metadata": False
+    }
+}
+```
+
+### Running the stage
+
+```
+python3 main.py
+```
+
+---
+
+# 15. Summary
+
+The Cleaning Stage:
+
+- Normalises raw data  
+- Validates structure  
+- Canonicalises SMILES  
+- Generates InChIKeys  
+- Computes rich metadata  
+- Writes local + global metadata  
+- Produces a unified cleaned dataset  
+
+It is the foundation for all downstream scientific computation.
 

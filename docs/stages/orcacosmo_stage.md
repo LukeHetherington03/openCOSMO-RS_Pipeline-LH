@@ -1,249 +1,414 @@
-# Stage: ORCA COSMO
+# ORCACOSMO Stage  
+openCOSMO‑RS Pipeline
 
-## Purpose
-The ORCA COSMO Stage performs single‑point CPCM calculations using ORCA (TZVPD with optional TZVP fallback) to generate COSMO surface data and `.orcacosmo` files for each conformer.
+The ORCACOSMO Stage performs ORCA CPCM single‑point calculations on optimised geometries to generate COSMO surface data required for COSMO‑RS solubility prediction.  
+It is the most computationally intensive stage and includes robust fallback logic, strict validation, and detailed provenance tracking.
 
-It consumes:
-- a conformer summary (energies‑like JSON) containing lookup_id, inchi_key, xyz_path
-- molecule metadata (for SMILES lookup)
-
-It produces:
-- `.orcacosmo` files (one per conformer)
-- `orcacosmo_results.json` (all results in one JSON)
-- `orcacosmo_summary.csv` (human‑readable summary)
-- `item_to_lookup_mapping.json`
-- raw ORCA outputs and parser JSONs for debugging
-
-This stage never modifies molecule‑level metadata or conformer geometry.
+This document describes the ORCACOSMO Stage in detail for both users and developers.
 
 ---
 
-## Inputs
+# 1. Purpose
 
-### Required
-#### `summary_file`
-A JSON list of conformer entries, each containing:
+The ORCACOSMO Stage:
 
-```json
-{
-  "lookup_id": "BQJCRH..._conf000",
-  "inchi_key": "BQJCRHHNABKAKU-KBQPJGBKSA-N",
-  "xyz_path": "xyz/BQJCRH..._conf000_opt.xyz",
-  "energy": -13.456,
-  "smiles": "CC(O)COC(=O)C=C"
-}
-Molecule metadata directory
-Configured via:
+- Reads `energies.json` from the Optimisation Stage  
+- Loads CPCM radii and chemistry constants  
+- Runs ORCA CPCM single‑point calculations (TZVPD → fallback TZVP)  
+- Parses `.log`, `.cpcm`, and `.cpcm_corr` files  
+- Reconstructs `.orcacosmo` files using the orchestrator  
+- Writes a canonical `orcacosmo_summary.json`  
+- Writes raw outputs, parsed outputs, and a summary CSV  
+- Tracks fallback usage, failures, and missing XYZs  
 
-Code
-config["constant_files"]["metadata_dir"]
-Each file: metadata/<inchi_key>.json
+It is the final quantum‑chemical stage before solubility prediction.
 
-Used to retrieve canonical SMILES.
+---
 
-CPCM radii file
-Code
-config["constant_files"]["chemistry_dir"]/cpcm_radii.json
-Contains:
+# 2. Canonical Input & Output
 
-element radii
+### **Input**
+The stage requires:
 
-cut_area
+```
+stage_input = energies.json
+```
 
-Parameters (args)
-Parameter	Type	Default	Description
-summary_file	string	required	Conformer summary JSON
-enable_tzvp_fallback	bool	false	If TZVPD fails, try TZVP
-strict (config)	bool	false	If true, any failure aborts the stage
-Processing Logic
-1. Load stage configuration
-ORCA executable path
+This file is copied into:
 
-metadata directory
+```
+jobs/J-.../inputs/energies.json
+```
 
-CPCM radii
+All XYZ files referenced in the entries are also copied into:
 
-fallback settings
+```
+jobs/J-.../inputs/<lookup_id>.xyz
+```
 
-ORCA version (best‑effort)
+### **Output**
+The stage declares its canonical output:
 
-2. Load conformer XYZs
-Read summary_file
+```
+orcacosmo_summary.json
+```
 
-Copy each conformer’s XYZ into inputs/ as <lookup_id>.xyz
+and also writes:
 
-3. Discover lookup_ids
-All .xyz files in inputs/ become processing targets.
-
-4. For each conformer
-Assigned a short ORCA‑safe item number:
-
-Code
-item000, item001, item002, ...
-Then:
-
-a. Prepare workdir
-Code
-tmp_exec/item000/
-b. Write ORCA input (TZVPD)
-Short filenames:
-
-Code
-item000_tzvpd.inp
-item000.log
-item000.cpcm
-item000.cpcm_corr
-c. Run ORCA TZVPD
-Check for valid .cpcm, .cpcm_corr, .log
-
-If valid → continue
-
-If invalid → fallback (if enabled)
-
-d. Optional fallback: TZVP
-Write item000_tzvp.inp
-
-Run ORCA
-
-Validate outputs
-
-If still invalid → fail (strict) or skip (non‑strict)
-
-e. Copy raw outputs
-Copied to:
-
-Code
-raw_outputs/<lookup_id>.log
-raw_outputs/<lookup_id>.cpcm
-raw_outputs/<lookup_id>.cpcm_corr
-f. Parse outputs
-Using:
-
-OrcaLogParser
-
-OrcaCpcmParser
-
-OrcaCpcmCorrParser
-
-Parser JSONs are written to:
-
-Code
-parsed_outputs/<lookup_id>.log.json
-parsed_outputs/<lookup_id>.cpcm.json
-parsed_outputs/<lookup_id>.cpcm_corr.json
-g. Build bundle for orchestrator
-Bundle contains:
-
-metadata (lookup_id, inchi_key, smiles, method_used, fallback)
-
-paths to parser JSONs
-
-XYZ path
-
-h. Run OrcaCosmoOrchestrator
-Produces:
-
-Code
+```
+orcacosmo_summary.csv
+item_to_lookup_mapping.json
+raw_outputs/<lookup_id>.{log,cpcm,cpcm_corr}
+parsed_outputs/<lookup_id>.{log,cpcm,cpcm_corr}.json
 orcacosmo_outputs/<lookup_id>.orcacosmo
-i. Record success
-Stored in memory for final JSON + CSV.
+```
 
-Outputs
-1. orcacosmo_outputs/<lookup_id>.orcacosmo
-Final COSMO surface file reconstructed by the orchestrator.
+These appear under:
 
-2. orcacosmo_results.json
-A single JSON containing all conformer results:
+```
+jobs/J-.../outputs/
+```
 
-json
-[
-  {
-    "lookup_id": "...",
-    "inchi_key": "...",
-    "smiles": "...",
-    "item_number": 0,
-    "method_used": "TZVPD",
-    "fallback_triggered": false,
-    "elapsed_seconds": 12.4,
-    "orcacosmo_path": "orcacosmo_outputs/<lookup_id>.orcacosmo",
-    "parsed": {
-      "log": { ... },
-      "cpcm": { ... },
-      "cpcm_corr": { ... }
-    },
-    "provenance": {
-      "orca_version": "6.1.1",
-      "cpcm_radii_source": ".../cpcm_radii.json",
-      "last_modified": "2026-02-01T23:40:00Z"
-    }
-  }
-]
-3. orcacosmo_summary.csv
-Human‑readable summary:
+---
 
-| lookup_id | inchi_key | method_used | fallback_triggered | elapsed_seconds | orcacosmo_path | item_number |
+# 3. Parameters & Configuration
 
-4. item_to_lookup_mapping.json
-Maps ORCA item numbers to lookup_ids:
+The stage reads configuration from:
 
-json
-{
-  "0": "BQJCRH..._conf000",
-  "1": "BQJCRH..._conf001"
-}
-5. Raw outputs (for debugging)
-Code
+```
+config/paths.json
+```
+
+### Required configuration keys
+
+| Key | Description |
+|-----|-------------|
+| `orca.executable` | Path to ORCA binary |
+| `orca.home` | ORCA installation directory |
+| `constant_files.chemistry_dir` | CPCM radii JSON |
+| `constant_files.metadata_dir` | Molecule metadata |
+| `enable_tzvp_fallback` | Whether to allow fallback |
+| `cosmo.strict` | Strict mode toggle |
+
+### Strict Mode
+
+Strict mode enforces:
+
+- Missing XYZ → fail  
+- Missing CPCM files → fail  
+- Both TZVPD and TZVP failing → fail  
+
+Without strict mode, these become warnings and the molecule is skipped.
+
+---
+
+# 4. Execution Flow
+
+The ORCACOSMO Stage follows this sequence:
+
+1. **Load configuration**  
+2. **Load CPCM radii**  
+3. **Prepare output directories**  
+4. **Load entries + copy XYZs**  
+5. **Discover lookup IDs**  
+6. **For each lookup ID:**  
+   - Assign item number  
+   - Prepare workdir  
+   - Write ORCA input (TZVPD)  
+   - Run ORCA  
+   - Validate CPCM outputs  
+   - If invalid → fallback to TZVP  
+   - Copy raw outputs  
+   - Parse `.log`, `.cpcm`, `.cpcm_corr`  
+   - Write parsed JSONs  
+   - Build bundle  
+   - Reconstruct `.orcacosmo` file  
+   - Append summary entry  
+7. **Write final summary JSON + CSV**  
+8. **Write item‑to‑lookup mapping**  
+9. **Print warning summary**  
+
+---
+
+# 5. CPCM Radii
+
+The stage loads:
+
+```
+CONSTANT_FILES/chemistry/cpcm_radii.json
+```
+
+This file contains:
+
+- Element‑specific radii  
+- `cut_area` parameter  
+
+These values are injected into ORCA input files.
+
+---
+
+# 6. ORCA Input Generation
+
+The stage writes two possible ORCA input files:
+
+### **TZVPD (primary method)**
+
+```
+! CPCM BP86 def2-TZVPD SP
+```
+
+### **TZVP (fallback method)**
+
+```
+! CPCM BP86 def2-TZVP SP
+```
+
+Both include:
+
+- `%MaxCore 2000`  
+- `%base` directive  
+- `%cpcm` block with radii and cut_area  
+- `%elprop` block  
+- `* xyzfile 0 1 <lookup_id>.xyz`  
+
+These files are stored in:
+
+```
+outputs/orca_inputs/<lookup_id>_tzvpd.inp
+outputs/orca_inputs/<lookup_id>_tzvp.inp
+```
+
+---
+
+# 7. ORCA Execution
+
+ORCA is executed via:
+
+```
+orca <input.inp>
+```
+
+with environment:
+
+- `OMP_NUM_THREADS = max_procs`  
+- `LD_LIBRARY_PATH` set to ORCA directory  
+- MPI variables removed to avoid conflicts  
+
+Logs are written to:
+
+```
+tmp_exec/itemNNN/itemNNN.log
+```
+
+---
+
+# 8. Fallback Logic (TZVPD → TZVP)
+
+The stage first attempts:
+
+```
+TZVPD
+```
+
+If CPCM validation fails:
+
+- If fallback disabled → fail  
+- If fallback enabled → run TZVP  
+
+Validation checks:
+
+- `.cpcm` exists and >100 bytes  
+- `.cpcm_corr` exists and >100 bytes  
+- `.log` exists and >1000 bytes  
+
+If both TZVPD and TZVP fail → stage fails.
+
+---
+
+# 9. Raw Output Copying
+
+After ORCA finishes, raw outputs are copied to:
+
+```
 raw_outputs/<lookup_id>.log
 raw_outputs/<lookup_id>.cpcm
 raw_outputs/<lookup_id>.cpcm_corr
-6. Parser JSONs (for orchestrator)
-Code
+```
+
+Missing files are logged.
+
+---
+
+# 10. Parsing
+
+The stage uses three parsers:
+
+- `OrcaLogParser`
+- `OrcaCpcmParser`
+- `OrcaCpcmCorrParser`
+
+Parsed JSONs are written to:
+
+```
 parsed_outputs/<lookup_id>.log.json
 parsed_outputs/<lookup_id>.cpcm.json
 parsed_outputs/<lookup_id>.cpcm_corr.json
-Guarantees
-ORCA filenames inside workdirs remain short (item000.*) to avoid filesystem limits.
+```
 
-External filenames use full lookup_id for clarity.
+---
 
-All results are aggregated into a single JSON file.
+# 11. Bundle Construction
 
-.orcacosmo files are always written if ORCA succeeds.
+Each lookup ID produces a bundle:
 
-Fallback is only used if enabled.
+```
+{
+  "meta": {...},
+  "paths": {...},
+  "optimisation_entry": {...}
+}
+```
 
-No molecule‑level metadata is modified.
+This bundle is written to:
 
-No geometry is changed.
+```
+parsed_outputs/<lookup_id>_bundle.json
+```
 
-Failure Modes
+It includes:
+
+- Lookup ID  
+- InChIKey  
+- SMILES  
+- Method used (TZVPD/TZVP)  
+- Fallback flag  
+- ORCA version  
+- CPCM radii source  
+- Paths to parsed JSONs  
+- Original optimisation entry  
+
+---
+
+# 12. COSMO Reconstruction
+
+The stage uses:
+
+```
+OrcaCosmoOrchestrator(bundle)
+```
+
+to reconstruct the `.orcacosmo` file.
+
+Output is written to:
+
+```
+orcacosmo_outputs/<lookup_id>.orcacosmo
+```
+
+This file is consumed by the Solubility Stage.
+
+---
+
+# 13. Summary Outputs
+
+The stage writes:
+
+### **Canonical output**
+```
+orcacosmo_summary.json
+```
+
+### **CSV summary**
+```
+orcacosmo_summary.csv
+```
+
+Columns include:
+
+- lookup_id  
+- inchi_key  
+- smiles  
+- energy  
+- method_used  
+- fallback_triggered  
+- elapsed_seconds  
+- orcacosmo_path  
+- item_number  
+
+### **Item mapping**
+```
+item_to_lookup_mapping.json
+```
+
+---
+
+# 14. Warning System
+
+The stage tracks:
+
+- Successful items  
+- Failed items  
+- Fallback usage  
+- Missing XYZ files  
+
+A summary is printed at the end.
+
+---
+
+# 15. Failure Modes
+
 The stage fails if:
 
-summary_file missing or invalid
+- ORCA executable missing  
+- CPCM radii missing  
+- XYZ missing (strict mode)  
+- Both TZVPD and TZVP fail  
+- Parser errors (strict mode)  
+- Missing CPCM files (strict mode)  
 
-CPCM radii file missing
+Failures update:
 
-ORCA executable missing
+```
+pipeline_state.json
+job_state.json
+```
 
-Both TZVPD and TZVP fail (strict mode)
+and halt the pipeline.
 
-XYZ missing for a conformer (strict mode)
+---
 
-In non‑strict mode:
+# 16. Minimal Example
 
-failures are logged,
+### pipeline_spec entry
 
-conformer is skipped,
+```python
+{
+    "stage": "orcacosmo",
+    "args": {
+        "resources": {"cpus": 8}
+    }
+}
+```
 
-stage continues.
+### Running the stage
 
-Warning Summary (logged)
-At the end of the stage:
+```
+python3 main.py
+```
 
-Code
-========== ORCA COSMO Summary ==========
-Successful: X
-Failed: Y
-Fallback used: Z
-Missing XYZ: N
-========================================
+---
+
+# 17. Summary
+
+The ORCACOSMO Stage:
+
+- Runs ORCA CPCM single‑point calculations  
+- Supports TZVPD with automatic TZVP fallback  
+- Validates CPCM outputs  
+- Parses log and CPCM files  
+- Reconstructs `.orcacosmo` files  
+- Provides full provenance and summary reporting  
+- Supports strict mode for reproducibility  
+
+It is the final quantum‑chemical stage before solubility prediction.
+

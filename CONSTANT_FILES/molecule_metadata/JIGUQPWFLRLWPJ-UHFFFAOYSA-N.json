@@ -77,10 +77,10 @@
   "molar_refractivity": 26.829999999999988,
   "provenance": {
     "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t2.csv",
-    "cleaning_timestamp": "2026-02-17T12:13:10.360368Z",
-    "pipeline_version": "unknown",
-    "generated_by_request": "R-17Feb26-1204-53419-orca_fast_t2",
-    "generated_by_job": "J-17Feb26-1204-53419-cleaning"
+    "cleaning_timestamp": "2026-02-17T14:13:59.316267Z",
+    "pipeline_version": "main@e7e1169",
+    "generated_by_request": "R-17Feb26-1413-58984-test_abort",
+    "generated_by_job": "J-17Feb26-1413-58985-cleaning"
   },
   "melting_temp": 202.15,
   "melting_temp_source": "Chemical book",
