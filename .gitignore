@@ -63,3 +63,10 @@ test_env/
 resources/
 software/
 dev/
+
+
+# -------------------------
+# Pipeline out files
+# -------------------------
+pipeline.out
+*.out

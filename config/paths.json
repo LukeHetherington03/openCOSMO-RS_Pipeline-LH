@@ -2,6 +2,8 @@
   "_comment": "Global configuration for openCOSMO-RS Pipeline",
   "_note": "All paths are absolute and point to real executables or directories",
 
+  "base_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data",
+ 
   "crest": {
     "home": "/home/lunet/cglh4/software/crest",
     "executable": "/home/lunet/cglh4/software/crest/crest"

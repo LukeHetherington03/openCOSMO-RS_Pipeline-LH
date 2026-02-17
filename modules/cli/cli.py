@@ -5,6 +5,7 @@ import sys
 
 from modules.cli.q_commands import QueueCommands
 from modules.cli.r_commands import RequestCommands
+from modules.cli.env_commands import EnvCommands
 
 
 class PipelineCLI:
@@ -18,11 +19,17 @@ class PipelineCLI:
         if not self.cmd:
             return self._help()
 
+        # Queue commands
         if self.cmd == "q":
             return QueueCommands.dispatch(self.args)
 
+        # Request commands
         if self.cmd == "r":
             return RequestCommands.dispatch(self.args)
+
+        # Environment commands
+        if self.cmd == "env":
+            return EnvCommands.dispatch(self.args)
 
         print(f"Unknown command: {self.cmd}")
         self._help()
@@ -34,7 +41,6 @@ Usage: pl <command>
 Queue:
     pl q start
     pl q stop
-    pl q drain
     pl q status
     pl q list
     pl q cancel <id>
@@ -51,6 +57,14 @@ Requests:
     pl r publish <id>
     pl r archive <id>
     pl r trash <id>
+
+Environment:
+    pl env check         Run full environment validation
+    pl env software      Validate external executables
+    pl env resources     Validate openCOSMO paths + constant files
+    pl env chemistry     Validate chemistry JSON files
+    pl env pip           Validate required Python packages
+    pl env table         Pretty table output
 """)
 
 
