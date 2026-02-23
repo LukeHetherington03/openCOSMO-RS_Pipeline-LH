@@ -3,8 +3,8 @@ from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem import rdmolops
 from rdkit.Chem import rdchem
 from rdkit.Chem import rdDetermineBonds
-
-
+import requests
+import re
 
 class MoleculeUtils:
     """
@@ -141,3 +141,103 @@ class MoleculeUtils:
         mol = MoleculeUtils.mol_from_xyz(xyz_atoms)
         adj = rdmolops.GetAdjacencyMatrix(mol, useBO=True)
         return adj
+
+
+    # ======================================================================
+    # NEW SECTION: Melting point retrieval (PubChem PUG-View)
+    # ======================================================================
+
+    PUBCHEM_CID_URL = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/{}/cids/JSON"
+    )
+    PUBCHEM_RECORD_URL = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{}/JSON"
+    )
+
+    @staticmethod
+    def _pubchem_cid_from_inchikey(inchikey: str):
+        """Return PubChem CID for an InChIKey, or None."""
+        try:
+            url = MoleculeUtils.PUBCHEM_CID_URL.format(inchikey)
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            cids = data.get("IdentifierList", {}).get("CID", [])
+            return cids[0] if cids else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _pubchem_full_record(cid: int):
+        """Return full PUG-View JSON record for a CID, or None."""
+        try:
+            url = MoleculeUtils.PUBCHEM_RECORD_URL.format(cid)
+            r = requests.get(url, timeout=10)
+            return r.json()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _recursive_find_melting_point(node):
+        """
+        Recursively search the PUG-View JSON tree for melting point.
+        Returns float or None.
+        """
+        if isinstance(node, dict):
+            # Check if this is the melting point section
+            if node.get("TOCHeading") == "Melting Point":
+                info_list = node.get("Information", [])
+                for info in info_list:
+                    value = info.get("Value", {})
+                    strings = value.get("StringWithMarkup", [])
+                    for s in strings:
+                        text = s.get("String", "")
+                        m = re.search(r"-?\d+(\.\d+)?", text)
+                        if m:
+                            return float(m.group(0))
+
+            # Recurse into dict values
+            for v in node.values():
+                mp = MoleculeUtils._recursive_find_melting_point(v)
+                if mp is not None:
+                    return mp
+
+        elif isinstance(node, list):
+            for item in node:
+                mp = MoleculeUtils._recursive_find_melting_point(item)
+                if mp is not None:
+                    return mp
+
+        return None
+    
+    @staticmethod
+    def get_melting_point(inchikey: str):
+        """
+        Returns melting_temp and melting_temp_source in the format expected
+        by the CleaningStage metadata writer.
+
+        Output:
+            {
+                "melting_temp": float or "N/A",
+                "melting_temp_source": "pubchem" or "missing"
+            }
+        """
+        if not inchikey:
+            return {"melting_temp": "N/A", "melting_temp_source": "missing"}
+
+        cid = MoleculeUtils._pubchem_cid_from_inchikey(inchikey)
+        if cid is None:
+            return {"melting_temp": "N/A", "melting_temp_source": "missing"}
+
+        record = MoleculeUtils._pubchem_full_record(cid)
+        if not record:
+            return {"melting_temp": "N/A", "melting_temp_source": "missing"}
+
+        mp_celsius = MoleculeUtils._recursive_find_melting_point(record)
+        if mp_celsius is None:
+            return {"melting_temp": "N/A", "melting_temp_source": "missing"}
+
+        # Convert °C → K
+        mp_kelvin = mp_celsius + 273.15
+
+        return {"melting_temp": mp_kelvin, "melting_temp_source": "pubchem"}
+

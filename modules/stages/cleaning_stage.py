@@ -6,10 +6,12 @@ from datetime import datetime
 from rdkit import Chem
 from rdkit.Chem import inchi
 from rdkit.Chem import Descriptors
-import hashlib
-
 from modules.stages.base_stage import BaseStage
 
+
+# ---------------------------------------------------------------------------
+# Column name normalisation
+# ---------------------------------------------------------------------------
 
 STANDARD_NAMES = {
     "experimental solubility /mol frac": "experimental_solubility_mol_frac",
@@ -26,6 +28,13 @@ STANDARD_NAMES = {
     "gfus_mode": "Gfus_mode",
 }
 
+# --- NEW: AqSol format support (non-destructive extension) ---
+STANDARD_NAMES.update({
+    "solubility": "experimental_solubility_mol_frac",
+    "predicted_solubility": "aqsol_predicted_solubility",
+})
+
+
 DEFAULT_METADATA = {
     "melting_temp": "N/A",
     "melting_temp_source": "N/A",
@@ -35,28 +44,32 @@ DEFAULT_METADATA = {
     "anionic": False,
     "mol_name": "N/A",
     "mol_name_iupac": "N/A",
-    "experimental_solubility_mol_frac": None
+    "experimental_solubility_mol_frac": None,
 }
 
-METADATA_VERSION = 1
+METADATA_VERSION = 3
 
 
 class CleaningStage(BaseStage):
     """
     Cleans raw CSV files into a unified dataset and produces molecule metadata.
 
+    Supports:
+        - Legacy experimental CSVs
+        - AqSol ML CSVs (Name, Solubility, SMILES, Predicted_Solubility)
+
     Produces:
         cleaned.csv
         molecule_metadata/<inchi_key>.json
     """
 
+    # ----------------------------------------------------------------------
+    # Execute
+    # ----------------------------------------------------------------------
     def execute(self):
-        # Strict mode
         self.strict_mode = self.strict("cleaning")
 
-        # Declare canonical output
         output_csv = self.set_stage_output("cleaned.csv")
-
         metadata_dir = self.output_path("molecule_metadata")
         os.makedirs(metadata_dir, exist_ok=True)
 
@@ -66,13 +79,9 @@ class CleaningStage(BaseStage):
             "default_charge": 0,
         }
 
-        # Resolve input CSVs
         csv_list = self._resolve_input_sources()
-
-        # NEW: merge and store raw input
         self._write_combined_raw_input(csv_list)
 
-        # Track items by filename stem
         lookup_ids = [
             os.path.splitext(os.path.basename(p))[0]
             for p in csv_list
@@ -99,7 +108,7 @@ class CleaningStage(BaseStage):
             source_file = self._find_source_file(lookup_id, csv_list)
             self._write_metadata_for_frame(df, metadata_dir, source_file)
 
-            df = self._reorder_columns(df)
+            df = self._minimal_cleaned_frame(df)
             combined_rows.append(df)
 
             self.update_progress(lookup_id)
@@ -113,13 +122,12 @@ class CleaningStage(BaseStage):
         self._log_warning_summary()
         self.log(f"Clean dataset written to: {output_csv}")
 
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Resolve input sources
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _resolve_input_sources(self):
         csv_list = []
 
-        # input_folder(s)
         if "input_folder" in self.parameters:
             folders = [self.parameters["input_folder"]]
         elif "input_folders" in self.parameters:
@@ -132,17 +140,14 @@ class CleaningStage(BaseStage):
         for folder in folders:
             if not os.path.isdir(folder):
                 self.fail(f"input_folder is not a directory: {folder}")
-
             for fname in os.listdir(folder):
                 if fname.lower().endswith(".csv"):
                     csv_list.append(os.path.join(folder, fname))
 
-        # input_csv(s)
         if "input_csv" in self.parameters:
             raw = self.parameters["input_csv"]
             if isinstance(raw, str):
                 raw = [raw]
-
             for p in raw:
                 self.require_file(p, "input_csv")
                 csv_list.append(p)
@@ -152,14 +157,12 @@ class CleaningStage(BaseStage):
 
         csv_list = sorted(set(csv_list))
         self.log(f"Resolved {len(csv_list)} CSV files for cleaning")
-
         return csv_list
 
+    # ----------------------------------------------------------------------
+    # Write combined raw input
+    # ----------------------------------------------------------------------
     def _write_combined_raw_input(self, csv_list):
-        """
-        Merge all input CSVs into a single raw_combined.csv file
-        stored under the job's inputs directory.
-        """
         frames = []
         for path in csv_list:
             try:
@@ -173,33 +176,26 @@ class CleaningStage(BaseStage):
             self.fail("No valid CSVs could be read for raw input merge.")
 
         combined = pd.concat(frames, ignore_index=True)
-
-        # Write to job inputs directory
         out_path = self.input_path("raw_combined.csv")
         combined.to_csv(out_path, index=False)
-
         self.log(f"Merged raw input written to: {out_path}")
 
-
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Load CSV
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _load_raw_csv(self, lookup_id, csv_list):
         matches = [
             p for p in csv_list
             if os.path.splitext(os.path.basename(p))[0] == lookup_id
         ]
-
         if not matches:
             self.log(f"[WARNING] No CSV found for lookup_id {lookup_id}")
             return None
 
-        path = matches[0]
-
         try:
-            return pd.read_csv(path)
+            return pd.read_csv(matches[0])
         except Exception as e:
-            self.log(f"[ERROR] Failed to read {path}: {e}")
+            self.log(f"[ERROR] Failed to read {matches[0]}: {e}")
             return None
 
     def _find_source_file(self, lookup_id, csv_list):
@@ -208,9 +204,9 @@ class CleaningStage(BaseStage):
                 return os.path.abspath(p)
         return None
 
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Header standardisation
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _normalise_header(self, col):
         return col.strip().lower().replace(" ", "_")
 
@@ -233,35 +229,33 @@ class CleaningStage(BaseStage):
 
         return df
 
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Validation
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _validate_required_fields(self, df, lookup_id):
-        if "smiles" not in df.columns:
-            msg = f"SMILES column missing in {lookup_id}.csv"
-            self.log(f"[ERROR] {msg}")
-            if self.strict_mode:
-                self.fail(msg)
-            return False
-
+        has_smiles = "smiles" in df.columns
         has_name = ("mol_name" in df.columns) or ("mol_name_iupac" in df.columns)
-        if not has_name:
-            msg = f"No name column (Name/mol_name_iupac) in {lookup_id}.csv"
+        has_sol = "experimental_solubility_mol_frac" in df.columns
+
+        if not (has_smiles and has_name and has_sol):
+            msg = (
+                f"Missing required fields in {lookup_id}.csv — "
+                f"need SMILES, Name, Solubility"
+            )
             self.log(f"[ERROR] {msg}")
             if self.strict_mode:
                 self.fail(msg)
             return False
 
         if "charge" not in df.columns:
-            self.log(f"[INFO] 'charge' column missing in {lookup_id}.csv — defaulting to 0")
             df["charge"] = 0
             self.warnings["default_charge"] += 1
 
         return True
 
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # SMILES canonicalisation
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _canonicalise_smiles(self, df, lookup_id):
         def _canon(smi):
             try:
@@ -275,9 +269,9 @@ class CleaningStage(BaseStage):
         df["smiles"] = df["smiles"].astype(str).apply(_canon)
         return df
 
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # InChIKey generation
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _smiles_to_inchikey(self, smiles):
         try:
             mol = Chem.MolFromSmiles(smiles)
@@ -298,57 +292,17 @@ class CleaningStage(BaseStage):
 
         return df
     
+    # ----------------------------------------------------------------------
+    # Metadata writer
+    # ----------------------------------------------------------------------
     def _write_metadata_for_frame(self, df, metadata_dir, source_file):
-        from rdkit.Chem import (
-            Lipinski, rdMolDescriptors, Crippen, Descriptors
-        )
+        from rdkit.Chem import Lipinski, rdMolDescriptors, Crippen
+        from modules.utils.molecule_utils import MoleculeUtils
 
         pipeline_version = self.config.get("pipeline_version", "unknown")
         timestamp = datetime.utcnow().isoformat() + "Z"
         overwrite = self.parameters.get("overwrite_metadata", False)
 
-        # ------------------------------------------------------------
-        # Functional group SMARTS patterns
-        # ------------------------------------------------------------
-        FG_SMARTS = {
-            "is_amide": "[NX3][CX3](=[OX1])[#6]",
-            "is_ester": "[CX3](=O)[OX2H0][#6]",
-            "is_alcohol": "[OX2H][CX4]",
-            "is_amine": "[NX3;H2,H1,H0;!$(NC=O)]",
-            "is_carboxylic_acid": "C(=O)[OH]",
-            "is_ketone": "[CX3](=O)[#6]",
-            "is_aldehyde": "[CX3H1](=O)[#6]",
-            "is_nitrile": "C#N",
-
-            # Polymer-relevant groups
-            "is_acrylate": "C=CC(=O)O[*]",
-            "is_methacrylate": "C=C(C)C(=O)O[*]",
-            "is_acrylamide": "C=CC(=O)N[*]",
-            "is_methacrylamide": "C=C(C)C(=O)N[*]",
-            "is_vinyl_ether": "C=CO[*]",
-            "is_vinyl_ester": "C=COC(=O)[*]",
-            "is_styrenic": "c1ccccc1C=C[*]",
-
-            # Polar polymer groups
-            "is_ether": "[#6]-O-[#6]",
-            "is_carbonate": "O=C(O)O",
-            "is_urethane": "O=C(N)O",
-            "is_urea": "N-C(=O)-N",
-            "is_sulfonamide": "S(=O)(=O)N",
-            "is_sulfonate": "S(=O)(=O)O",
-            "is_phosphate": "P(=O)(O)(O)",
-
-            # Halogen flags
-            "is_fluorinated": "[F]",
-            "is_chlorinated": "[Cl]",
-            "is_brominated": "[Br]",
-        }
-
-        FG_PATTERNS = {k: Chem.MolFromSmarts(v) for k, v in FG_SMARTS.items()}
-
-        # ------------------------------------------------------------
-        # Process each molecule
-        # ------------------------------------------------------------
         for inchi_key, group in df.groupby("inchi_key"):
             if not inchi_key:
                 continue
@@ -363,9 +317,7 @@ class CleaningStage(BaseStage):
             mol_name = row.get("mol_name", DEFAULT_METADATA["mol_name"])
             mol_name_iupac = row.get("mol_name_iupac", DEFAULT_METADATA["mol_name_iupac"])
 
-            # ------------------------------------------------------------
             # Physchem descriptors
-            # ------------------------------------------------------------
             if mol is not None:
                 rotatable_bonds = Lipinski.NumRotatableBonds(mol)
                 molecular_weight = rdMolDescriptors.CalcExactMolWt(mol)
@@ -375,48 +327,17 @@ class CleaningStage(BaseStage):
                 tpsa = rdMolDescriptors.CalcTPSA(mol)
                 logp = Crippen.MolLogP(mol)
                 aromatic_rings = rdMolDescriptors.CalcNumAromaticRings(mol)
-
-                N_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "N")
-                O_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "O")
-                S_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() == "S")
-                halogen_count = sum(1 for a in mol.GetAtoms() if a.GetSymbol() in ["F", "Cl", "Br", "I"])
-
-                ring_count = mol.GetRingInfo().NumRings()
-                heterocycle_count = sum(
-                    1 for ring in mol.GetRingInfo().AtomRings()
-                    if any(mol.GetAtomWithIdx(i).GetAtomicNum() not in (6, 1) for i in ring)
-                )
-
-                double_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "DOUBLE")
-                triple_bond_count = sum(1 for b in mol.GetBonds() if b.GetBondType().name == "TRIPLE")
-
-                fg_flags = {}
-                fg_counts = {}
-                for name, patt in FG_PATTERNS.items():
-                    matches = mol.GetSubstructMatches(patt)
-                    fg_flags[name] = len(matches) > 0
-                    fg_counts[name.replace("is_", "") + "_count"] = len(matches)
-
                 Fsp3 = rdMolDescriptors.CalcFractionCSP3(mol)
                 Bertz = Descriptors.BertzCT(mol)
                 molar_refractivity = Crippen.MolMR(mol)
-
             else:
                 rotatable_bonds = molecular_weight = heavy_atom_count = None
                 hbond_donors = hbond_acceptors = None
                 tpsa = logp = aromatic_rings = None
-                N_count = O_count = S_count = halogen_count = None
-                ring_count = heterocycle_count = None
-                double_bond_count = triple_bond_count = None
-                fg_flags = {}
-                fg_counts = {}
                 Fsp3 = Bertz = molar_refractivity = None
 
-            # ------------------------------------------------------------
-            # Build metadata block
-            # ------------------------------------------------------------
             meta = {
-                "metadata_version": 3,
+                "metadata_version": METADATA_VERSION,
                 "inchi_key": inchi_key,
                 "smiles": smiles,
                 "mol_name": mol_name,
@@ -433,22 +354,6 @@ class CleaningStage(BaseStage):
                 "tpsa": tpsa,
                 "logp": logp,
                 "aromatic_rings": aromatic_rings,
-
-                # Structural counts
-                "N_count": N_count,
-                "O_count": O_count,
-                "S_count": S_count,
-                "halogen_count": halogen_count,
-                "ring_count": ring_count,
-                "heterocycle_count": heterocycle_count,
-                "double_bond_count": double_bond_count,
-                "triple_bond_count": triple_bond_count,
-
-                # Functional groups
-                **fg_flags,
-                **fg_counts,
-
-                # Global shape
                 "Fsp3": Fsp3,
                 "Bertz_complexity": Bertz,
                 "molar_refractivity": molar_refractivity,
@@ -462,16 +367,35 @@ class CleaningStage(BaseStage):
                 },
             }
 
-            # Optional metadata fields
-            for key, default in DEFAULT_METADATA.items():
-                if key in ("mol_name", "mol_name_iupac"):
-                    continue
-                value = row.get(key, default)
-                if isinstance(value, float) and pd.isna(value):
-                    value = default
-                meta[key] = value
+            # Add solubility fields (legacy + AqSol)
+            for field in ["experimental_solubility_mol_frac", "aqsol_predicted_solubility"]:
+                if field in row and not pd.isna(row[field]):
+                    meta[field] = row[field]
 
-            # Warn if melting temp missing
+            # Fill defaults
+            for key, default in DEFAULT_METADATA.items():
+                if key not in meta:
+                    meta[key] = default
+
+            # --------------------------------------------------------------
+            # NEW: PubChem fallback for melting_temp
+            # --------------------------------------------------------------
+            mp_info = MoleculeUtils.get_melting_point(inchi_key)
+
+            # Only fill if missing or "N/A"
+            if meta["melting_temp"] in (None, "N/A", "", "nan"):
+                meta["melting_temp"] = mp_info["melting_temp"]
+                meta["melting_temp_source"] = mp_info["melting_temp_source"]
+
+                if mp_info["melting_temp_source"] == "pubchem":
+                    self.log(f"[MP] PubChem fallback used for {inchi_key}: {mp_info['melting_temp']} °C")
+                else:
+                    self.log(f"[MP] No melting point found for {inchi_key} (missing).")
+            else:
+                # Existing value preserved
+                meta["melting_temp_source"] = "existing"
+
+            # Warn if still missing
             if meta["melting_temp"] == "N/A":
                 self.log(
                     f"[WARNING] melting_temp not provided for {inchi_key}. "
@@ -479,19 +403,12 @@ class CleaningStage(BaseStage):
                 )
                 self.warnings["missing_melting_temp"] += 1
 
-            # Serialise
-            meta_json = json.dumps(meta, indent=2)
-
-            # ------------------------------------------------------------
-            # Write local metadata (ALWAYS)
-            # ------------------------------------------------------------
+            # Write local metadata
             local_path = os.path.join(metadata_dir, f"{inchi_key}.json")
             with open(local_path, "w") as f:
-                f.write(meta_json)
+                f.write(json.dumps(meta, indent=2))
 
-            # ------------------------------------------------------------
-            # Write global metadata (ONLY if allowed)
-            # ------------------------------------------------------------
+            # Write global metadata
             global_meta_dir = self.config.get("constant_files", {}).get("metadata_dir")
             if not global_meta_dir:
                 self.log("[WARNING] No global metadata_dir defined in config; skipping global write.")
@@ -500,36 +417,28 @@ class CleaningStage(BaseStage):
             os.makedirs(global_meta_dir, exist_ok=True)
             global_path = os.path.join(global_meta_dir, f"{inchi_key}.json")
 
-            # Overwrite logic
             if overwrite or not os.path.exists(global_path):
                 with open(global_path, "w") as f:
-                    f.write(meta_json)
+                    f.write(json.dumps(meta, indent=2))
 
-                if overwrite:
-                    self.log(f"[INFO] Global metadata overwritten: {global_path}")
-                else:
-                    self.log(f"[INFO] Global metadata created: {global_path}")
-            else:
-                self.log(f"[INFO] Global metadata unchanged: {global_path}")
+    # ----------------------------------------------------------------------
+    # Minimal cleaned CSV
+    # ----------------------------------------------------------------------
+    def _minimal_cleaned_frame(self, df):
+        keep = [
+            "inchi_key",
+            "smiles",
+            "charge",
+            "mol_name",
+            "mol_name_iupac",
+            "experimental_solubility_mol_frac",
+            "aqsol_predicted_solubility",
+        ]
+        return df[[c for c in keep if c in df.columns]]
 
-
-
-    # ------------------------------------------------------------
-    # Column ordering
-    # ------------------------------------------------------------
-    def _reorder_columns(self, df):
-        first = ["inchi_key", "smiles", "charge"]
-        if "mol_name" in df.columns:
-            first.append("mol_name")
-        if "mol_name_iupac" in df.columns:
-            first.append("mol_name_iupac")
-
-        others = [c for c in df.columns if c not in first]
-        return df[first + others]
-
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     # Warning summary
-    # ------------------------------------------------------------
+    # ----------------------------------------------------------------------
     def _log_warning_summary(self):
         total = sum(self.warnings.values())
         if total == 0:
