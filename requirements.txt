@@ -1,0 +1,17 @@
+numpy
+pandas
+scipy
+matplotlib
+plotly
+requests
+urllib3
+chardet
+certifi
+psutil
+simplejson
+python-dateutil
+pytz
+pyarrow
+rdkit
+openbabel
+PySocks

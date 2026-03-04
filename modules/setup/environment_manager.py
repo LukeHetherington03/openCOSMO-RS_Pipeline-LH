@@ -31,7 +31,16 @@ REQUIRED_PIP_PACKAGES = [
     "pandas",
     "rdkit",
     "openbabel",
-]
+    "plotly",
+    "matplotlib",
+    "requests",
+    "urllib3",
+    "chardet",            # or "charset-normalizer" depending on Python version
+    "certifi",
+    "psutil",
+    "pytz",
+    ]
+
 
 
 class EnvironmentManager:

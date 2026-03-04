@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+modules/cli/cli.py
+
+Entry point for the  pl  command-line interface.
+
+Usage
+-----
+    pl q  <subcommand>    Queue control and inspection
+    pl r  <subcommand>    Request management
+    pl env <subcommand>   Environment validation
+
+All subcommand routing is delegated to the relevant Commands class.
+See each module for full subcommand documentation.
+"""
+
 import sys
 
 from modules.cli.q_commands import QueueCommands
@@ -12,22 +27,19 @@ class PipelineCLI:
 
     def __init__(self, argv):
         self.argv = argv
-        self.cmd = argv[1] if len(argv) > 1 else None
+        self.cmd  = argv[1] if len(argv) > 1 else None
         self.args = argv[2:]
 
     def dispatch(self):
         if not self.cmd:
             return self._help()
 
-        # Queue commands
         if self.cmd == "q":
             return QueueCommands.dispatch(self.args)
 
-        # Request commands
         if self.cmd == "r":
             return RequestCommands.dispatch(self.args)
 
-        # Environment commands
         if self.cmd == "env":
             return EnvCommands.dispatch(self.args)
 
@@ -39,32 +51,36 @@ class PipelineCLI:
 Usage: pl <command>
 
 Queue:
-    pl q start
-    pl q stop
-    pl q status
-    pl q list
-    pl q cancel <id>
-    pl q reprio <id> <prio>
+    pl q start                  Start the queue worker
+    pl q stop                   Graceful stop — cancels pending work,
+                                  lets running items finish checkpoints,
+                                  propagates SIGTERM to all child processes
+    pl q kill                   Immediate stop — SIGKILL to entire process
+                                  tree; in-flight items re-run on resume
+    pl q status                 Show worker state and queue counts
+    pl q list                   List pending and running requests
+    pl q cancel <id>            Remove a pending request from the queue
+    pl q reprio <id> <prio>     Change priority of a pending request
 
 Requests:
-    pl r list
-    pl r status <id>
-    pl r info <id>
-    pl r logs <id>
-    pl r note <id> "text"
-    pl r tag <id> tag1 tag2
-    pl r pin <id>
-    pl r publish <id>
-    pl r archive <id>
-    pl r trash <id>
+    pl r list                   List all requests
+    pl r status <id>            Show pipeline state for a request
+    pl r info <id>              Detailed request information
+    pl r logs <id>              Print stage logs
+    pl r note <id> "text"       Attach a note to a request
+    pl r tag <id> tag1 tag2     Tag a request
+    pl r pin <id>               Pin a request
+    pl r publish <id>           Mark a request as published
+    pl r archive <id>           Archive a request
+    pl r trash <id>             Move a request to trash
 
 Environment:
-    pl env check         Run full environment validation
-    pl env software      Validate external executables
-    pl env resources     Validate openCOSMO paths + constant files
-    pl env chemistry     Validate chemistry JSON files
-    pl env pip           Validate required Python packages
-    pl env table         Pretty table output
+    pl env check                Run full environment validation
+    pl env software             Validate external executables
+    pl env resources            Validate openCOSMO paths + constant files
+    pl env chemistry            Validate chemistry JSON files
+    pl env pip                  Validate required Python packages
+    pl env table                Pretty table output
 """)
 
 

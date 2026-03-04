@@ -314,26 +314,26 @@ class Job:
     # Stage execution
     # ------------------------------------------------------------
     def run(self):
-        module_name = f"modules.stages.{self.stage}_stage"
-        class_name = f"{self.stage.capitalize()}Stage"
+            """
+            Load and execute the stage class for this job.
 
-        try:
-            module = __import__(module_name, fromlist=[class_name])
-            StageClass = getattr(module, class_name)
-        except Exception as e:
-            self.mark_failed(f"Failed to load stage module: {e}")
-            raise
+            Lifecycle (mark_running / mark_complete / mark_failed) is owned
+            entirely by BaseStage.run() — Job.run() must not call those methods
+            itself, or job_state.json will be double-written and the 'running'
+            status will clobber the 'completed' status written by BaseStage.
+            """
+            module_name = f"modules.stages.{self.stage}_stage"
+            class_name  = f"{self.stage.capitalize()}Stage"
 
-        stage_instance = StageClass(self)
+            try:
+                module     = __import__(module_name, fromlist=[class_name])
+                StageClass = getattr(module, class_name)
+            except Exception as e:
+                self.mark_failed(f"Failed to load stage module: {e}")
+                raise
 
-        self.mark_running()
-
-        try:
-            stage_instance.run()
-            self.mark_complete()
-        except Exception as e:
-            self.mark_failed(e)
-            raise
+            stage_instance = StageClass(self)
+            stage_instance.run()   # BaseStage.run() owns all lifecycle calls
 
     # ------------------------------------------------------------
     # Convenience

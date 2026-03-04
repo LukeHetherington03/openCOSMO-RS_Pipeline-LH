@@ -14,14 +14,14 @@ from modules.execution.queue import QueueManager
 # ------------------------------------------------------------
 
 # Parent request + job to continue from
-PARENT_REQUEST_ID = "R-18Feb26-1041-41558-gxtb_tzvpd"     # <-- EDIT THIS
-PARENT_JOB_ID     = "J-18Feb26-1434-58364-orcacosmo"     # <-- EDIT THIS
+PARENT_REQUEST_ID = "R-25Feb26-1353-56457-NTU_AZ_medicinesol_set2"     # <-- EDIT THIS
+PARENT_JOB_ID     = "J-25Feb26-1439-03066-orcacosmo"    # <-- EDIT THIS
 
 # Title for the new continuation request
-NEW_TITLE = "gxtb_tzvpd_solfix"
+NEW_TITLE = "NTU_set2_solfix"
 
 # Whether to enqueue instead of running directly
-USE_QUEUE = True
+USE_QUEUE = False
 
 # Define the new pipeline spec you want to run
 PIPELINE_SPEC = [

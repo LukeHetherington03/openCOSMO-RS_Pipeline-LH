@@ -1,0 +1,11 @@
+{
+  "description": "Default water only",
+  "combos": {
+    "water_only": {
+      "label": "Default - pure water",
+      "solvents": [
+        {"name": "water", "mol_frac": 1.0}
+      ]
+    }
+  }
+}

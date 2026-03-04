@@ -1,6 +1,6 @@
 {
-  "default_basis": "TZVPD",
-  "fallback_basis": "TZVP",
+  "default_basis": "TZVP",
+  "fallback_basis": false,
   "functional": "BP86",
   "solvation": "CPCM",
   "maxcore": 2000,

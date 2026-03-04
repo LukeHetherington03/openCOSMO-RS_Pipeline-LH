@@ -1,11 +1,10 @@
 {
   "_comment": "Configuration for COSMO-RS solubility calculations",
 
-  "default_solvent": "water",
   "default_temperature": 298.15,
   "calculation_type": "all",
 
-  "initial_solute_x": 1e-4,
+  "initial_solute_x": 0,
 
   "saturation": {
     "enabled": true,

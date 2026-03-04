@@ -1,0 +1,7 @@
+{
+  "_comment": "Node resource ceiling for openCOSMO-RS Pipeline.",
+  "_note": "max_cores should be ~80% of physical cores to leave OS headroom.",
+  "_hierarchy": "runtime parameters.resources.cpus → max_cores here → psutil fallback",
+  "total_cores": 24,
+  "max_cores": 20
+}

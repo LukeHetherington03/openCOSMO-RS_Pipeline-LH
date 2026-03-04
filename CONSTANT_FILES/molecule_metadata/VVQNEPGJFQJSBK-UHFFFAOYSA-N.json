@@ -2,7 +2,7 @@
   "metadata_version": 3,
   "inchi_key": "VVQNEPGJFQJSBK-UHFFFAOYSA-N",
   "smiles": "C=C(C)C(=O)OC",
-  "mol_name": "methyl methacrylate",
+  "mol_name": "methyl_methacrylate",
   "mol_name_iupac": "N/A",
   "charge": 0,
   "multiplicity": 1,
@@ -18,17 +18,19 @@
   "Bertz_complexity": 94.25327665163482,
   "molar_refractivity": 26.829999999999988,
   "provenance": {
-    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/ml_50_1.csv",
-    "cleaning_timestamp": "2026-02-23T15:22:16.997964Z",
-    "pipeline_version": "main@9076d68",
-    "generated_by_request": "R-23Feb26-1522-12842-tests_aqsoldb_melttemp_50_1",
-    "generated_by_job": "J-23Feb26-1522-12844-cleaning"
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t5.csv",
+    "input_mode": "custom",
+    "cleaning_timestamp": "2026-03-03T08:58:22.207882Z",
+    "pipeline_version": "main@07bb5e4",
+    "generated_by_request": "R-03Mar26-0858-21717-acr_t2_parallel",
+    "generated_by_job": "J-03Mar26-0858-21742-cleaning"
   },
-  "experimental_solubility_mol_frac": 0.1498304210622659,
-  "melting_temp": -54.0,
-  "melting_temp_source": "pubchem",
+  "experimental_solubility_mol_frac": 0.0028444654760474,
+  "melting_temp": 225.15,
+  "melting_temp_source": "provided",
   "Hfus": "N/A",
   "Gfus_mode": "MyrdalYalkowsky",
   "formula_calcd": "",
-  "anionic": false
+  "anionic": false,
+  "melting_temp_c": -48.0
 }

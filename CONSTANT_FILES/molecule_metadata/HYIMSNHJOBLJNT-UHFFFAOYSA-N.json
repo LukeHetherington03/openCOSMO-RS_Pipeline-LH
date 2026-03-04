@@ -2,7 +2,7 @@
   "metadata_version": 3,
   "inchi_key": "HYIMSNHJOBLJNT-UHFFFAOYSA-N",
   "smiles": "COC(=O)C1=C(C)NC(C)=C(C(=O)OC)C1c1ccccc1[N+](=O)[O-]",
-  "mol_name": "nifedipine",
+  "mol_name": "Nifedipine",
   "mol_name_iupac": "N/A",
   "charge": 0,
   "multiplicity": 1,
@@ -18,17 +18,19 @@
   "Bertz_complexity": 771.1110283918142,
   "molar_refractivity": 88.40510000000003,
   "provenance": {
-    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/ml_50_1.csv",
-    "cleaning_timestamp": "2026-02-23T15:22:16.997964Z",
-    "pipeline_version": "main@9076d68",
-    "generated_by_request": "R-23Feb26-1522-12842-tests_aqsoldb_melttemp_50_1",
-    "generated_by_job": "J-23Feb26-1522-12844-cleaning"
+    "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/NTU_new2.csv",
+    "input_mode": "pipeline",
+    "cleaning_timestamp": "2026-02-28T14:29:15.356653Z",
+    "pipeline_version": "main@07bb5e4",
+    "generated_by_request": "R-28Feb26-1429-14193-NTU_2",
+    "generated_by_job": "J-28Feb26-1429-14194-cleaning"
   },
-  "experimental_solubility_mol_frac": 1.737800828749376e-05,
-  "melting_temp": 342.0,
-  "melting_temp_source": "pubchem",
+  "melting_temp": 446.15,
+  "melting_temp_source": "provided",
   "Hfus": "N/A",
   "Gfus_mode": "MyrdalYalkowsky",
   "formula_calcd": "",
-  "anionic": false
+  "anionic": false,
+  "experimental_solubility_mol_frac": null,
+  "melting_temp_c": 173.0
 }

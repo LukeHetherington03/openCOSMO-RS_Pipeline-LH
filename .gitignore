@@ -60,8 +60,6 @@ __pycache__/
 # Local test environments
 # -------------------------
 test_env/
-resources/
-software/
 dev/
 
 

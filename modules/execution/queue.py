@@ -1,200 +1,355 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
+"""
+modules/execution/queue.py
+
+Queue manager for the pipeline worker system.
+
+Manages the filesystem-based queue used to schedule, track, and control
+pipeline requests.  The queue is a set of directories under the base
+queue path:
+
+    queue/
+        pending/    requests waiting to run  (<request_id>.json)
+        running/    request currently executing  (<request_id>.json)
+        completed/  finished requests
+        failed/     requests that raised an unhandled exception
+        worker.pid  PID of the running worker process
+        worker.pgid process group ID of the running worker  [new 03/03/2026]
+        worker.log  append-only log of worker events
+        heartbeat   timestamp updated every idle loop by the worker
+
+One request runs at a time.  The worker picks the highest-priority
+pending request, moves it to running/, and blocks until it finishes.
+
+Priority is an integer stored in the queue entry JSON.  Lower values
+run first.  Default priority is 100.
+"""
+
 import json
-from datetime import datetime, timezone
+import os
+import time
+
 
 class QueueManager:
     """
-    File-based queue manager for pipeline requests.
-    BASE_DIR is loaded once from paths.json and stored internally.
+    Static interface to the filesystem queue.
+
+    All methods are class methods.  Call init_base_dir() once at
+    process startup before using any other method.
+
+    Directory layout
+    ----------------
+    DIRS["pending"]    queue/pending/
+    DIRS["running"]    queue/running/
+    DIRS["completed"]  queue/completed/
+    DIRS["failed"]     queue/failed/
+
+    Control files
+    -------------
+    PID_FILE           queue/worker.pid     — worker process ID
+    PGID_FILE          queue/worker.pgid    — worker process group ID  [new 03/03/2026]
+    LOG_FILE           queue/worker.log     — append-only worker events
+    HEARTBEAT_FILE     queue/heartbeat      — last-alive timestamp
+
+    Queue entry format  (each .json file)
+    --------------------------------------
+    {
+        "request_id": "abc123",
+        "priority":   100,
+        "submitted":  "2026-01-01T00:00:00Z"
+    }
     """
 
-    BASE_DIR = None
-    QUEUE_ROOT = None
-    DIRS = None
-    PID_PATH = None
-    HEARTBEAT_PATH = None
-    WORKER_LOG = None
+    DIRS: dict         = {}
+    PID_FILE: str      = None
+    PGID_FILE: str     = None   # [new 03/03/2026]
+    LOG_FILE: str      = None
+    HEARTBEAT_FILE:str = None
 
-    # ------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Initialisation
-    # ------------------------------------------------------------
-    @staticmethod
-    def init_base_dir(base_dir: str):
-        """Initialise all queue paths from a single base directory."""
-        QueueManager.BASE_DIR = os.path.abspath(base_dir)
-        QueueManager.QUEUE_ROOT = os.path.join(QueueManager.BASE_DIR, "queue")
+    # -------------------------------------------------------------------------
 
-        QueueManager.DIRS = {
-            "pending":   os.path.join(QueueManager.QUEUE_ROOT, "pending"),
-            "running":   os.path.join(QueueManager.QUEUE_ROOT, "running"),
-            "completed": os.path.join(QueueManager.QUEUE_ROOT, "completed"),
-            "failed":    os.path.join(QueueManager.QUEUE_ROOT, "failed"),
-            "cancelled": os.path.join(QueueManager.QUEUE_ROOT, "cancelled"),
+    @classmethod
+    def init_base_dir(cls, base_dir: str):
+        """
+        Set the base queue directory and create all subdirectories.
+
+        Must be called once at worker startup and once in each CLI command
+        before any other QueueManager method is used.
+
+        Parameters
+        ----------
+        base_dir : str
+            Root directory for all pipeline data.  The queue lives at
+            <base_dir>/queue/.
+        """
+        queue_dir = os.path.join(base_dir, "queue")
+
+        cls.DIRS = {
+            "pending":   os.path.join(queue_dir, "pending"),
+            "running":   os.path.join(queue_dir, "running"),
+            "completed": os.path.join(queue_dir, "completed"),
+            "failed":    os.path.join(queue_dir, "failed"),
         }
 
-        QueueManager.PID_PATH = os.path.join(QueueManager.QUEUE_ROOT, "worker.pid")
-        QueueManager.HEARTBEAT_PATH = os.path.join(QueueManager.QUEUE_ROOT, "worker_heartbeat")
-        QueueManager.WORKER_LOG = os.path.join(QueueManager.QUEUE_ROOT, "worker.log")
+        cls.PID_FILE       = os.path.join(queue_dir, "worker.pid")
+        cls.PGID_FILE      = os.path.join(queue_dir, "worker.pgid")   # [new 03/03/2026]
+        cls.LOG_FILE       = os.path.join(queue_dir, "worker.log")
+        cls.HEARTBEAT_FILE = os.path.join(queue_dir, "heartbeat")
 
-        os.makedirs(QueueManager.QUEUE_ROOT, exist_ok=True)
-        for d in QueueManager.DIRS.values():
+        for d in cls.DIRS.values():
             os.makedirs(d, exist_ok=True)
 
-    # ------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------
-    @staticmethod
-    def now_iso():
-        return datetime.now(timezone.utc).isoformat()
+    # -------------------------------------------------------------------------
+    # Queue entry operations
+    # -------------------------------------------------------------------------
 
-    # ------------------------------------------------------------
-    # Enqueue
-    # ------------------------------------------------------------
-    @staticmethod
-    def enqueue(request_id: str, priority: int = 0):
+    @classmethod
+    def enqueue(cls, request_id: str, priority: int = 100):
+        """
+        Add a request to the pending queue.
+
+        Parameters
+        ----------
+        request_id : str
+            Unique identifier for the request.
+        priority : int
+            Scheduling priority.  Lower values run first.  Default 100.
+        """
         entry = {
             "request_id": request_id,
-            "priority": int(priority),
-            "created_at": QueueManager.now_iso(),
+            "priority":   priority,
+            "submitted":  _now(),
         }
-
-        path = os.path.join(QueueManager.DIRS["pending"], f"{request_id}.json")
+        path = os.path.join(cls.DIRS["pending"], f"{request_id}.json")
         with open(path, "w") as f:
             json.dump(entry, f, indent=2)
 
-        return path
+    @classmethod
+    def next_request(cls) -> str | None:
+        """
+        Return the request_id of the highest-priority pending request,
+        or None if the queue is empty.
 
-    # ------------------------------------------------------------
-    # Fetch next request
-    # ------------------------------------------------------------
-    @staticmethod
-    def next_request():
-        pending_files = [
-            os.path.join(QueueManager.DIRS["pending"], f)
-            for f in os.listdir(QueueManager.DIRS["pending"])
-            if f.endswith(".json")
-        ]
-
-        if not pending_files:
-            return None
-
+        Moves the entry from pending/ to running/ atomically.
+        """
+        pending = cls.DIRS["pending"]
         entries = []
-        for path in pending_files:
+
+        for fname in os.listdir(pending):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(pending, fname)
             try:
                 with open(path) as f:
-                    data = json.load(f)
-                entries.append((path, data))
+                    entry = json.load(f)
+                entries.append((entry.get("priority", 100), fname, entry))
             except Exception:
-                bad = os.path.basename(path)
-                os.rename(path, os.path.join(QueueManager.DIRS["failed"], bad))
+                continue
 
         if not entries:
             return None
 
-        entries.sort(key=lambda x: (x[1].get("priority", 0), x[1].get("created_at", "")))
+        entries.sort(key=lambda x: x[0])
+        _, fname, entry = entries[0]
 
-        path, data = entries[0]
-        request_id = data["request_id"]
+        src = os.path.join(pending, fname)
+        dst = os.path.join(cls.DIRS["running"], fname)
+        os.rename(src, dst)
 
-        running_path = os.path.join(QueueManager.DIRS["running"], f"{request_id}.json")
-        os.rename(path, running_path)
+        return entry["request_id"]
 
-        return request_id
+    @classmethod
+    def mark_completed(cls, request_id: str):
+        """Move a running request to the completed directory."""
+        cls._move_request(request_id, "running", "completed")
 
-    # ------------------------------------------------------------
-    # State transitions
-    # ------------------------------------------------------------
-    @staticmethod
-    def _move(request_id: str, src: str, dst: str):
-        src_path = os.path.join(QueueManager.DIRS[src], f"{request_id}.json")
-        dst_path = os.path.join(QueueManager.DIRS[dst], f"{request_id}.json")
-        if os.path.exists(src_path):
-            os.rename(src_path, dst_path)
+    @classmethod
+    def mark_failed(cls, request_id: str):
+        """Move a running request to the failed directory."""
+        cls._move_request(request_id, "running", "failed")
 
-    @staticmethod
-    def mark_completed(request_id: str):
-        QueueManager._move(request_id, "running", "completed")
+    @classmethod
+    def cancel(cls, request_id: str):
+        """
+        Remove a pending request from the queue.
 
-    @staticmethod
-    def mark_failed(request_id: str):
-        QueueManager._move(request_id, "running", "failed")
+        Does nothing if the request is already running, completed, or
+        not found — cancelling a running request requires pl q stop.
+        """
+        path = os.path.join(cls.DIRS["pending"], f"{request_id}.json")
+        if os.path.exists(path):
+            os.remove(path)
 
-    @staticmethod
-    def cancel(request_id: str):
-        QueueManager._move(request_id, "pending", "cancelled")
+    @classmethod
+    def reprioritise(cls, request_id: str, priority: int):
+        """
+        Update the priority of a pending request.
 
-    @staticmethod
-    def reprioritise(request_id: str, new_priority: int):
-        path = os.path.join(QueueManager.DIRS["pending"], f"{request_id}.json")
+        Has no effect if the request is not in the pending queue.
+        """
+        path = os.path.join(cls.DIRS["pending"], f"{request_id}.json")
         if not os.path.exists(path):
-            return False
-
+            return
         with open(path) as f:
-            data = json.load(f)
-
-        data["priority"] = int(new_priority)
-
+            entry = json.load(f)
+        entry["priority"] = priority
         with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(entry, f, indent=2)
 
-        return True
+    @classmethod
+    def _move_request(cls, request_id: str, src_dir: str, dst_dir: str):
+        src = os.path.join(cls.DIRS[src_dir], f"{request_id}.json")
+        dst = os.path.join(cls.DIRS[dst_dir], f"{request_id}.json")
+        if os.path.exists(src):
+            os.rename(src, dst)
 
-    # ------------------------------------------------------------
-    # PID + heartbeat
-    # ------------------------------------------------------------
-    @staticmethod
-    def write_pid(pid: int):
-        with open(QueueManager.PID_PATH, "w") as f:
+    # -------------------------------------------------------------------------
+    # Worker PID
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def write_pid(cls, pid: int):
+        """Write the worker process ID to queue/worker.pid."""
+        with open(cls.PID_FILE, "w") as f:
             f.write(str(pid))
 
-    @staticmethod
-    def read_pid():
-        try:
-            with open(QueueManager.PID_PATH) as f:
-                pid_str = f.read().strip()
-                return int(pid_str) if pid_str else None
-        except:
-            return None
+    @classmethod
+    def read_pid(cls) -> int | None:
+        """
+        Read the worker PID from queue/worker.pid.
 
-    @staticmethod
-    def clear_pid():
-        if os.path.exists(QueueManager.PID_PATH):
-            os.remove(QueueManager.PID_PATH)
+        Returns None if the file is absent or unreadable.
+        """
+        if cls.PID_FILE and os.path.exists(cls.PID_FILE):
+            try:
+                return int(open(cls.PID_FILE).read().strip())
+            except (ValueError, OSError):
+                return None
+        return None
 
-    @staticmethod
-    def update_heartbeat():
-        with open(QueueManager.HEARTBEAT_PATH, "w") as f:
-            f.write(QueueManager.now_iso())
+    @classmethod
+    def clear_pid(cls):
+        """Remove queue/worker.pid."""
+        if cls.PID_FILE and os.path.exists(cls.PID_FILE):
+            try:
+                os.remove(cls.PID_FILE)
+            except OSError:
+                pass
 
-    @staticmethod
-    def read_heartbeat():
-        if not os.path.exists(QueueManager.HEARTBEAT_PATH):
-            return None
-        return open(QueueManager.HEARTBEAT_PATH).read().strip()
+    @classmethod
+    def is_worker_running(cls) -> bool:
+        """
+        Return True if a worker process is currently live.
 
-    @staticmethod
-    def is_worker_running():
-        pid = QueueManager.read_pid()
-        if not pid:
+        Reads the PID file and checks whether that process exists.
+        Returns False if no PID file exists or the process is gone.
+        """
+        pid = cls.read_pid()
+        if pid is None:
             return False
-
         try:
-            os.kill(pid, 0)
+            os.kill(pid, 0)   # signal 0 — existence check only
             return True
         except ProcessLookupError:
             return False
         except PermissionError:
-            return True
+            return True       # process exists but we can't signal it
 
-    # ------------------------------------------------------------
-    # Logging
-    # ------------------------------------------------------------
-    @staticmethod
-    def log_worker(message: str):
-        line = f"{QueueManager.now_iso()} {message}\n"
-        with open(QueueManager.WORKER_LOG, "a") as f:
+    # -------------------------------------------------------------------------
+    # Worker PGID  [new 03/03/2026]
+    # -------------------------------------------------------------------------
+    #
+    # The process group ID is used by pl q stop and pl q kill to send signals
+    # to the entire worker subtree (pool workers, ORCA, XTB) in one call.
+    #
+    # The worker writes its PGID on startup after calling os.setpgrp() to
+    # place itself in a new process group.  All child processes it spawns
+    # automatically inherit the same PGID.
+    #
+    # pl q stop  — os.killpg(pgid, SIGTERM)  — graceful, propagates to tree
+    # pl q kill  — os.killpg(pgid, SIGKILL)  — immediate, propagates to tree
+
+    @classmethod
+    def write_pgid(cls, pgid: int):
+        """Write the worker process group ID to queue/worker.pgid."""
+        with open(cls.PGID_FILE, "w") as f:
+            f.write(str(pgid))
+
+    @classmethod
+    def read_pgid(cls) -> int | None:
+        """
+        Read the worker PGID from queue/worker.pgid.
+
+        Returns None if the file is absent or unreadable.
+        """
+        if cls.PGID_FILE and os.path.exists(cls.PGID_FILE):
+            try:
+                return int(open(cls.PGID_FILE).read().strip())
+            except (ValueError, OSError):
+                return None
+        return None
+
+    @classmethod
+    def clear_pgid(cls):
+        """Remove queue/worker.pgid."""
+        if cls.PGID_FILE and os.path.exists(cls.PGID_FILE):
+            try:
+                os.remove(cls.PGID_FILE)
+            except OSError:
+                pass
+
+    # -------------------------------------------------------------------------
+    # Heartbeat
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def update_heartbeat(cls):
+        """
+        Write the current timestamp to queue/heartbeat.
+
+        Called by the worker on every idle loop iteration.  Can be used
+        externally to detect a stalled worker (heartbeat older than N seconds
+        while the worker is supposedly running).
+        """
+        with open(cls.HEARTBEAT_FILE, "w") as f:
+            f.write(_now())
+
+    @classmethod
+    def read_heartbeat(cls) -> str | None:
+        """Return the last heartbeat timestamp string, or None if absent."""
+        if cls.HEARTBEAT_FILE and os.path.exists(cls.HEARTBEAT_FILE):
+            try:
+                return open(cls.HEARTBEAT_FILE).read().strip()
+            except OSError:
+                return None
+        return None
+
+    # -------------------------------------------------------------------------
+    # Worker log
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def log_worker(cls, message: str):
+        """
+        Append a timestamped message to queue/worker.log.
+
+        This is the worker's own event log — separate from per-request
+        stage logs.  Written by the worker and by signal handlers.
+        """
+        line = f"[{_now()}] {message}\n"
+        with open(cls.LOG_FILE, "a") as f:
             f.write(line)
-        print(f"[worker] {message}")
+
+
+# -----------------------------------------------------------------------------
+# Module helpers
+# -----------------------------------------------------------------------------
+
+def _now() -> str:
+    """Return current UTC time as an ISO 8601 string."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")

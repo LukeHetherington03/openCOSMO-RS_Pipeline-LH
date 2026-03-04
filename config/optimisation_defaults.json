@@ -1,9 +1,8 @@
 {
-  "engine": "gxtb_opt",
+  "engine": "gxtb_opt_normal",
   "level": "normal",
   "max_iter": 250,
+  "keep_scratch": true,
   "global_fail_threshold": 0.8,
-  "keep_scratch": false,
-  "gfn": 2,
   "strict": false
 }

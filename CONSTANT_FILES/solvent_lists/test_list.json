@@ -1,0 +1,24 @@
+{
+  "description": "Test solvent list — water, levulinic acid (2 conformers), and 50:50 mixture. Used to verify multicomponent solvent handling and multi-conformer solvent dirs.",
+  "combos": {
+    "water_only": {
+      "label": "Pure water",
+      "solvents": [
+        {"name": "water", "mol_frac": 1.0}
+      ]
+    },
+    "levulinic_acid_only": {
+      "label": "Pure levulinic acid",
+      "solvents": [
+        {"name": "levulinic_acid", "mol_frac": 1.0}
+      ]
+    },
+    "50_50_water_levulinic": {
+      "label": "50:50 water/levulinic acid",
+      "solvents": [
+        {"name": "water",          "mol_frac": 0.5},
+        {"name": "levulinic_acid", "mol_frac": 0.5}
+      ]
+    }
+  }
+}

@@ -1,6 +1,7 @@
 {
   "_comment": "Global configuration for openCOSMO-RS Pipeline",
   "_note": "All paths are absolute and point to real executables or directories",
+  "_note_xtb": "xtb and gXTB truncate long filepaths internally (Fortran fixed-length buffers). Keep installation directories short (e.g., avoid long project folder names) or use symlinks to prevent driver path truncation errors.",
 
   "base_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data",
  
@@ -25,42 +26,41 @@
   },
 
   "opencosmo": {
-      "python_src": "/home/lunet/cglh4/resources/openCOSMO-RS_py/src",
-      "cpp_bindings": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp/bindings",
-      "python_driver": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/modules/solubility_engine/runCOSMO_RS_cpp.py"
+    "python_src": "/home/lunet/cglh4/resources/openCOSMO-RS_py/src",
+    "cpp_bindings": "/home/lunet/cglh4/resources/openCOSMO-RS_cpp/bindings",
+    "python_driver": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/modules/solubility_engine/runCOSMO_RS_cpp.py"
   },
-
 
   "constant_files": {
     "root": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES",
-
     "metadata_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/molecule_metadata",
     "solvent_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/solvents",
-
+    "solvent_lists": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/solvent_lists",
     "chemistry_dir": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/chemistry"
-    },
+  },
 
-    "generation": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/generation_defaults.json"
-    },
+  "generation": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/generation_defaults.json"
+  },
 
-    "pruning": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/pruning_defaults.json"
-    },
+  "pruning": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/pruning_defaults.json"
+  },
 
-    "optimisation": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_defaults.json",
-      "engines": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_engines.json"
-    },
+  "optimisation": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_defaults.json",
+    "engines": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/optimisation_engines.json"
+  },
 
-    "orcacosmo": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/orcacosmo_defaults.json"
-    },
+  "orcacosmo": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/orcacosmo_defaults.json"
+  },
 
-    "solubility": {
-      "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/solubility_defaults.json"
-    }
+  "solubility": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/solubility_defaults.json"
+  },
 
-
-
+  "resource_allocation": {
+    "defaults": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/config/resource_allocation.json"
+  }
 }
