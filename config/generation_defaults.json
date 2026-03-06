@@ -2,6 +2,16 @@
   "engine": "rdkit",
   "seed": 42,
   "strict": false,
-  "threads": 1,
-  "gfn": "gfn2"
+  "gfn": "gfn2",
+  "cores_per_item": {
+    "rdkit":     1,
+    "crest":     4,
+    "openbabel": 1
+  },
+  "parallel": {
+    "rdkit":     false,
+    "crest":     true,
+    "openbabel": false
+  },
+  "global_fail_threshold": 0.8
 }

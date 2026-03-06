@@ -143,6 +143,9 @@ class Job:
         self.completed_items = []
         self.failed_items = []
 
+        # Wall-time tracking
+        self._start_timestamp: str | None = None
+
         if load_existing:
             self._load_job_state()
 
@@ -178,6 +181,8 @@ class Job:
         status=None,
         created_at=None,
         completed_at=None,
+        start_timestamp=None,
+        stop_timestamp=None,
         error_message=None,
         output_file=None,
     ):
@@ -188,12 +193,17 @@ class Job:
             "status": status,
             "created_at": created_at,
             "completed_at": completed_at,
+            "start_timestamp": start_timestamp,
+            "stop_timestamp": stop_timestamp,
             "error_message": error_message,
             "output_file": output_file,
             "items": self.items,
             "pending_items": self.pending_items,
             "completed_items": self.completed_items,
             "failed_items": self.failed_items,
+            "n_items":  len(self.items),
+            "n_ok":     len(self.completed_items),
+            "n_failed": len(self.failed_items),
         }
 
         with open(self.job_state_path, "w") as f:
@@ -215,11 +225,19 @@ class Job:
         self.completed_items = state.get("completed_items", [])
         self.failed_items = state.get("failed_items", [])
 
+        # Restore wall-time tracking
+        self._start_timestamp = state.get("start_timestamp")
+
     def mark_running(self):
+        self._start_timestamp = (
+            datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        )
         self._write_job_state(
             status="running",
             created_at=datetime.now().isoformat(),
             completed_at=None,
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=None,
             error_message=None,
             output_file=None,
         )
@@ -229,6 +247,8 @@ class Job:
             status="failed",
             created_at=None,
             completed_at=datetime.now().isoformat(),
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
             error_message=str(error_message),
             output_file=None,
         )
@@ -239,6 +259,8 @@ class Job:
             status="completed",
             created_at=None,
             completed_at=datetime.now().isoformat(),
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
             error_message=None,
             output_file=output_file,
         )
@@ -256,6 +278,8 @@ class Job:
             status="running",
             created_at=datetime.now().isoformat(),
             completed_at=None,
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=None,
             error_message=None,
             output_file=None,
         )
@@ -275,6 +299,8 @@ class Job:
             status="running",
             created_at=None,
             completed_at=None,
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=None,
             error_message=None,
             output_file=None,
         )
@@ -294,6 +320,8 @@ class Job:
             status="running",
             created_at=None,
             completed_at=None,
+            start_timestamp=self._start_timestamp,
+            stop_timestamp=None,
             error_message=None,
             output_file=None,
         )

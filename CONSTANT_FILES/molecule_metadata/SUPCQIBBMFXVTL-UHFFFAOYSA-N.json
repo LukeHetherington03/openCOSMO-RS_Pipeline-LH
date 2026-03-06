@@ -20,10 +20,10 @@
   "provenance": {
     "source_file": "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/pipeline_data/input_data/acr_t5.csv",
     "input_mode": "custom",
-    "cleaning_timestamp": "2026-03-03T08:58:22.207882Z",
-    "pipeline_version": "main@07bb5e4",
-    "generated_by_request": "R-03Mar26-0858-21717-acr_t2_parallel",
-    "generated_by_job": "J-03Mar26-0858-21742-cleaning"
+    "cleaning_timestamp": "2026-03-05T19:41:57.807983Z",
+    "pipeline_version": "main@01697b0",
+    "generated_by_request": "R-05Mar26-1941-56385-babel__test",
+    "generated_by_job": "J-05Mar26-1941-56388-cleaning"
   },
   "experimental_solubility_mol_frac": 0.0008506837922274,
   "melting_temp": 198.15,

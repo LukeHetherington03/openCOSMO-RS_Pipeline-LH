@@ -295,6 +295,7 @@ class BaseStage:
         t_pool_start  = time.perf_counter()
         n_ok = n_failed = 0
         interrupted     = False
+        n_total         = len(still_pending)
 
         pool = ProcessPoolExecutor(max_workers=n_workers)
         _active_executor = pool     # register for SIGTERM handler
@@ -302,21 +303,24 @@ class BaseStage:
         try:
             # Submit all pending items
             futures: dict = {}
-            for item in still_pending:
+            for submit_idx, item in enumerate(still_pending, start=1):
                 args            = build_args_fn(item)
                 future          = pool.submit(worker_fn, args)
-                futures[future] = (item, time.perf_counter())
+                futures[future] = (item, submit_idx, time.perf_counter())
                 LogHelper.item_start(
                     self._stage_log,
-                    item_id = item,
+                    item_id = f"[{submit_idx}/{n_total}] {item}",
                     worker  = "submitted",
                     pid     = 0,          # PID comes back with the result
                 )
 
             # Collect results as they complete
+            n_done = 0
             for future in as_completed(futures):
-                item, t_submit = futures[future]
+                item, submit_idx, t_submit = futures[future]
                 elapsed = time.perf_counter() - t_submit
+                n_done += 1
+                pos_tag = f"[{n_done}/{n_total}]"
 
                 try:
                     exc = future.exception()
@@ -334,7 +338,7 @@ class BaseStage:
                     n_failed += 1
                     LogHelper.item_failed(
                         self._stage_log,
-                        item_id = item,
+                        item_id = f"{pos_tag} {item}",
                         worker  = "unknown",
                         pid     = 0,
                         elapsed = elapsed,
@@ -362,7 +366,7 @@ class BaseStage:
                         n_failed += 1
                         LogHelper.item_failed(
                             self._stage_log,
-                            item_id = item,
+                            item_id = f"{pos_tag} {item}",
                             worker  = worker_name,
                             pid     = worker_pid,
                             elapsed = elapsed,
@@ -383,7 +387,7 @@ class BaseStage:
 
                         LogHelper.item_complete(
                             self._stage_log,
-                            item_id = item,
+                            item_id = f"{pos_tag} {item}",
                             worker  = worker_name,
                             pid     = worker_pid,
                             elapsed = elapsed,
