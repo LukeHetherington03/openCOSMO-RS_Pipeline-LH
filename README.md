@@ -60,12 +60,6 @@ pl env check
 pl q start
 ```
 
-**7. Submit a request:**
-
-```bash
-pl r submit request.json
-```
-
 ---
 
 ## Submitting a run
