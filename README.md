@@ -68,26 +68,36 @@ pl r submit request.json
 
 ---
 
-## Request format
+## Submitting a run
 
-Create a `request.json`:
+Edit `modules/main.py` to configure your pipeline and input data, then run:
 
-```json
-{
-  "request_name": "my_run",
-  "input_csv": "/path/to/molecules.csv",
-  "pipeline_sequence": ["cleaning", "generation", "optimisation", "orcacosmo", "solubility"],
-  "stage_args": [
-    {},
-    {"engine": "rdkit", "num_confs": 20},
-    {"engine": "gxtb_opt_normal"},
-    {"default_basis": "TZVP"},
-    {}
-  ]
+```bash
+python3 -m modules.main
+```
+
+The pipeline spec is a list of stage dicts — each entry has a `stage` name and an `args` dict of parameters for that stage:
+
+```python
+input_csv = "/path/to/molecules.csv"
+
+pipeline_spec = [
+    {"stage": "cleaning",     "args": {"input_csv": input_csv, "overwrite_metadata": True}},
+    {"stage": "generation",   "args": {"engine": "rdkit", "n": 5}},
+    {"stage": "pruning",      "args": {"n": 1}},
+    {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
+    {"stage": "orcacosmo",    "args": {}},
+    {"stage": "solubility",   "args": {"solvent_list":"default_list"}},
+]
+
+parameters = {
+    "title": "my_run",
+    "resources": {"cpus": 20, "memory_gb": 64},
+    "config": config,
 }
 ```
 
-`pipeline_sequence` and `stage_args` are parallel lists — `stage_args[i]` applies to `pipeline_sequence[i]`.
+You can repeat stages (e.g. multiple sequential optimisation passes with different engines). Set `USE_QUEUE = True` in `main.py` to enqueue the run for the background worker, or `False` to run directly in the foreground.
 
 ---
 
@@ -98,7 +108,6 @@ pl q start                  # Start the queue worker
 pl q stop                   # Graceful stop
 pl q status                 # Worker state and queue counts
 
-pl r submit request.json    # Submit a new request
 pl r list                   # List all requests
 pl r status <id>            # Pipeline state for a request
 pl r logs <id>              # Stage logs

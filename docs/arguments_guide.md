@@ -21,56 +21,67 @@ openCOSMO-RS Pipeline
 
 ## 1. Pipeline spec (`request.json`)
 
-A `request.json` defines a complete pipeline run. The top-level fields are:
+The pipeline is configured in `modules/main.py` and submitted by running `python3 -m modules.main`. The `pipeline_spec` is a list of stage dicts — each entry specifies a stage name and its arguments:
 
-```json
-{
-  "request_name": "my_run",
-  "input_csv":    "/path/to/molecules.csv",
-  "pipeline_sequence": ["cleaning", "generation", "optimisation", "orcacosmo", "solubility"],
-  "stage_args": [
-    {},
-    {"engine": "rdkit", "num_confs": 20},
-    {"engine": "gxtb_opt_normal"},
-    {"default_basis": "TZVP"},
-    {}
-  ]
+```python
+pipeline_spec = [
+    {"stage": "cleaning",     "args": {"input_csv": "/path/to/molecules.csv", "overwrite_metadata": True}},
+    {"stage": "generation",   "args": {"engine": "rdkit", "n": 5}},
+    {"stage": "pruning",      "args": {"n": 1}},
+    {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
+    {"stage": "orcacosmo",    "args": {}},
+    {"stage": "solubility",   "args": {}},
+]
+
+parameters = {
+    "title": "my_run",
+    "resources": {"cpus": 20, "memory_gb": 64},
+    "config": config,
 }
 ```
 
-### Top-level fields
+### Pipeline spec fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `request_name` | string | No | Human-readable label. Defaults to timestamp. |
-| `input_csv` | string or list | Yes* | Path(s) to input CSV file(s). Also accepts `input_csvs`, `input_folder`, `input_folders`. |
-| `pipeline_sequence` | list of strings | Yes | Ordered list of stage names to run. |
-| `stage_args` | list of objects | Yes | Per-stage parameter overrides. **Must be the same length as `pipeline_sequence`** and aligned by index. |
-| `strict` | bool | No | Global strict mode — propagates to all stages unless overridden per-stage. |
-| `resources` | object | No | Runtime resource override (see [Resource parameters](#10-resource-parameters)). |
-| `tags` | list of strings | No | Metadata tags for organising requests. |
-| `notes` | string | No | Free-text note attached to the request. |
+| `stage` | string | Yes | Stage name. Valid values: `cleaning`, `generation`, `pruning`, `optimisation`, `orcacosmo`, `solubility`. |
+| `args` | object | Yes | Stage-specific parameters. Empty dict `{}` uses all defaults. |
 
-*`input_csv` / `input_csvs` / `input_folder` / `input_folders` are passed through to the cleaning stage.
+### Top-level parameters
 
-### `pipeline_sequence` and `stage_args`
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Human-readable label for the run. |
+| `resources` | object | No | Runtime resource override — `cpus`, `memory_gb`. |
+| `config` | object | Yes | The loaded `config/paths.json` (injected automatically in `main.py`). |
 
-`pipeline_sequence` is an ordered list of stage names. `stage_args` is a parallel list — `stage_args[0]` applies to `pipeline_sequence[0]`, `stage_args[1]` to `pipeline_sequence[1]`, and so on.
+### Repeating stages
 
-Each element of `stage_args` is a dict of parameter overrides for that stage. Empty dicts `{}` are valid and use all defaults.
+Stages can appear more than once in the spec. This is useful for chained optimisation passes with different engines:
+
+```python
+pipeline_spec = [
+    {"stage": "cleaning",     "args": {"input_csv": input_csv}},
+    {"stage": "generation",   "args": {"engine": "crest"}},
+    {"stage": "optimisation", "args": {"engine": "xtb_opt_loose"}},
+    {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
+    {"stage": "orcacosmo",    "args": {}},
+    {"stage": "solubility",   "args": {}},
+]
+```
+
+### Execution mode
+
+In `main.py`, set `USE_QUEUE`:
+
+```python
+USE_QUEUE = True   # Enqueue for background worker (recommended)
+USE_QUEUE = False  # Run directly in the foreground
+```
 
 **Valid stage names:** `cleaning`, `generation`, `pruning`, `optimisation`, `orcacosmo`, `solubility`
 
-**Common sequences:**
-
-```json
-["cleaning", "generation", "optimisation", "orcacosmo", "solubility"]
-["cleaning", "generation", "pruning", "optimisation", "orcacosmo", "solubility"]
-["cleaning", "generation"]
-["orcacosmo", "solubility"]
-```
-
-You can run partial pipelines by starting mid-sequence. The first stage must receive appropriate input (or `stage_input` must be provided manually).
+You can run partial pipelines by starting mid-sequence. The first stage must receive appropriate input via its `args` (e.g. `input_csv` for cleaning, or `stage_input` pointing to a prior canonical output).
 
 ---
 
