@@ -130,14 +130,15 @@ class CleaningStage(BaseStage):
         os.makedirs(metadata_dir, exist_ok=True)
 
         self.warnings = {
-            "missing_melting_temp":  0,
-            "implausible_mp":        0,
-            "invalid_smiles":        0,
-            "default_charge":        0,
-            "duplicate_inchikey":    0,
-            "impossible_solubility": 0,
-            "zero_solubility":       0,
-            "ambiguous_sol_unit":    0,
+            "missing_melting_temp":    0,
+            "implausible_mp":          0,
+            "invalid_smiles":          0,
+            "default_charge":          0,
+            "default_multiplicity":    0,
+            "duplicate_inchikey":      0,
+            "impossible_solubility":   0,
+            "zero_solubility":         0,
+            "ambiguous_sol_unit":      0,
         }
 
 
@@ -438,9 +439,12 @@ class CleaningStage(BaseStage):
             return False
 
         if "charge" not in df.columns:
-            df["charge"] = 0
+            df["charge"] = None  # sentinel; resolved per molecule below (same as multiplicity)
             self.warnings["default_charge"] += 1
-            self.log(f"[HEADER] 'charge' absent — defaulted to 0")
+            self.log_warning(f"[HEADER] 'charge' column absent — will use RDKit or default 0 per molecule")
+
+        if "multiplicity" not in df.columns:
+            df["multiplicity"] = None  # sentinel; resolved per molecule below
 
         # ── Melting point status (logged prominently) ──────────────────────
         has_mp = "melting_temp" in df.columns
@@ -456,8 +460,8 @@ class CleaningStage(BaseStage):
                    if n_impl else "")
             )
         else:
-            self.log(
-                f"[MP]    WARNING: no melting point column detected in "
+            self.log_warning(
+                f"[MP]    No melting point column detected in "
                 f"{lookup_id}. PubChem will be queried for every molecule. "
                 "To avoid this, include a 'Melting point' column (Kelvin)."
             )
@@ -727,8 +731,15 @@ class CleaningStage(BaseStage):
             return None, "missing"
 
         if MP_MIN_K <= kt <= MP_MAX_K:
-            src = _scalar(row.get("melting_temp_source")) or "provided"
-            return kt, str(src)
+            raw_src = row.get("melting_temp_source")
+            if isinstance(raw_src, pd.Series):
+                raw_src = raw_src.dropna()
+                raw_src = raw_src.iloc[0] if len(raw_src) else None
+            if raw_src is not None and str(raw_src).strip() not in ("", "nan", "None", "N/A"):
+                src = str(raw_src).strip()
+            else:
+                src = "user_input"
+            return kt, src
 
         name = row.get("mol_name", "?")
         self.log(
@@ -757,6 +768,8 @@ class CleaningStage(BaseStage):
         timestamp        = datetime.utcnow().isoformat() + "Z"
         overwrite        = self.parameters.get("overwrite_metadata", False)
         mp_counts        = {"provided": 0, "pubchem": 0, "missing": 0}
+        charge_counts    = {"user_input": 0, "rdkit_computed": 0, "default": 0}
+        mult_counts      = {"user_input": 0, "rdkit_computed": 0, "default": 0}
 
         def _safe_float(val):
             if isinstance(val, pd.Series):
@@ -775,7 +788,40 @@ class CleaningStage(BaseStage):
             row    = group.iloc[0]
             smiles = str(row.get("smiles", ""))
             mol    = Chem.MolFromSmiles(smiles)
-            charge = int(row.get("charge", 0))
+
+            # ── Charge (3-case) ────────────────────────────────────────────
+            raw_charge = row.get("charge")
+            if raw_charge is not None and str(raw_charge).strip() not in ("", "nan"):
+                charge        = int(raw_charge)
+                charge_source = "user_input"
+            elif mol is not None:
+                charge        = Chem.GetFormalCharge(mol)
+                charge_source = "rdkit_computed"
+            else:
+                charge        = 0
+                charge_source = "default"
+                self.log_warning(
+                    f"[META]  {ik}: charge not provided and RDKit cannot parse "
+                    f"SMILES — defaulted to 0"
+                )
+            charge_counts[charge_source] += 1
+
+            # ── Multiplicity (3-case) ──────────────────────────────────────
+            raw_mult = row.get("multiplicity")
+            if raw_mult is not None and str(raw_mult).strip() not in ("", "nan", "None"):
+                multiplicity        = int(raw_mult)
+                multiplicity_source = "user_input"
+            elif mol is not None and Descriptors.NumRadicalElectrons(mol) == 0:
+                multiplicity        = 1
+                multiplicity_source = "rdkit_computed"
+            else:
+                multiplicity        = 1
+                multiplicity_source = "default"
+                self.log_warning(
+                    f"[META]  {ik}: multiplicity not provided and cannot be "
+                    f"reliably determined — defaulted to 1"
+                )
+            mult_counts[multiplicity_source] += 1
 
             # Physchem descriptors
             if mol is not None:
@@ -810,8 +856,10 @@ class CleaningStage(BaseStage):
                 "mol_name":         str(row.get("mol_name", DEFAULT_METADATA["mol_name"])),
                 "mol_name_iupac":   str(row.get("mol_name_iupac",
                                                   DEFAULT_METADATA["mol_name_iupac"])),
-                "charge":           charge,
-                "multiplicity":     1 if charge == 0 else 2,
+                "charge":               charge,
+                "charge_source":        charge_source,
+                "multiplicity":         multiplicity,
+                "multiplicity_source":  multiplicity_source,
                 **phys,
                 "provenance": {
                     "source_file":          source_file,
@@ -860,9 +908,9 @@ class CleaningStage(BaseStage):
                             meta["melting_temp_source"] = mt_src
                             mp_counts["pubchem"] += 1
                         else:
-                            self.log(
-                                f"[MP]    Implausible PubChem value for {ik}: "
-                                f"{kt_pub:.1f} K — marked N/A"
+                            self.log_warning(
+                                f"[MP]    {ik}: implausible PubChem value "
+                                f"{kt_pub:.1f} K — marked N/A, no melting point available"
                             )
                             self.warnings["implausible_mp"] += 1
                             meta["melting_temp"]        = "N/A"
@@ -872,6 +920,10 @@ class CleaningStage(BaseStage):
                         meta["melting_temp"] = "N/A"
                         mp_counts["missing"] += 1
                 else:
+                    self.log_warning(
+                        f"[MP]    {ik}: no melting point in CSV or PubChem — "
+                        "COSMO-RS accuracy may be reduced"
+                    )
                     meta["melting_temp"]        = "N/A"
                     meta["melting_temp_source"] = "N/A"
                     mp_counts["missing"] += 1
@@ -898,6 +950,31 @@ class CleaningStage(BaseStage):
             f"missing={mp_counts['missing']}"
         )
 
+        # ── Charge/multiplicity source breakdown ───────────────────────────
+        n_mols = sum(charge_counts.values())
+        if n_mols:
+            non_user_charge = charge_counts["rdkit_computed"] + charge_counts["default"]
+            if non_user_charge > 0:
+                self.log_warning(
+                    f"[META]  {lookup_id}: charge not fully user-provided "
+                    f"({n_mols} molecule(s)) — "
+                    f"user_input={charge_counts['user_input']}, "
+                    f"rdkit_computed={charge_counts['rdkit_computed']}, "
+                    f"default={charge_counts['default']}"
+                )
+                self.warnings["default_charge"] += charge_counts["default"]
+
+            non_user_mult = mult_counts["rdkit_computed"] + mult_counts["default"]
+            if non_user_mult > 0:
+                self.log_warning(
+                    f"[META]  {lookup_id}: multiplicity not fully user-provided "
+                    f"({n_mols} molecule(s)) — "
+                    f"user_input={mult_counts['user_input']}, "
+                    f"rdkit_computed={mult_counts['rdkit_computed']} (closed-shell), "
+                    f"default={mult_counts['default']} (radical/open-shell assumed singlet)"
+                )
+                self.warnings["default_multiplicity"] += mult_counts["default"]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Minimal cleaned CSV  (downstream stages read this)
     # ─────────────────────────────────────────────────────────────────────────
@@ -906,6 +983,7 @@ class CleaningStage(BaseStage):
             "inchi_key",
             "smiles",
             "charge",
+            "multiplicity",
             "mol_name",
             "mol_name_iupac",
             "experimental_solubility_mol_frac",
@@ -932,7 +1010,9 @@ class CleaningStage(BaseStage):
             ("invalid_smiles",
              "SMILES that failed InChIKey generation — retained, flagged"),
             ("default_charge",
-             "file(s) with no charge column — defaulted to 0"),
+             "molecule(s) where charge could not be resolved (SMILES invalid) — defaulted to 0"),
+            ("default_multiplicity",
+             "molecule(s) where multiplicity could not be determined (possible radical) — defaulted to 1"),
             ("duplicate_inchikey",
              "row(s) collapsed — solubility averaged within duplicate groups"),
             ("impossible_solubility",

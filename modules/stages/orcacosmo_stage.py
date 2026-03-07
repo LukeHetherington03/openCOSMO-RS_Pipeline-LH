@@ -146,6 +146,8 @@ def _orcacosmo_worker(args: dict) -> dict:
     solvation      = args["solvation"]
     maxcore_mb     = args["maxcore_mb"]
     entry          = args["entry"]
+    charge         = args.get("charge", 0)
+    multiplicity   = args.get("multiplicity", 1)
 
     # ── Derived paths ─────────────────────────────────────────────────────────
     raw_dir         = os.path.join(outputs_dir, "raw_outputs")
@@ -177,6 +179,8 @@ def _orcacosmo_worker(args: dict) -> dict:
             cores_per_item  = cores_per_item,
             maxcore_mb      = maxcore_mb,
             orca_inputs_dir = orca_inputs_dir,
+            charge          = charge,
+            multiplicity    = multiplicity,
         )
 
         method_used        = run_result["method_used"]
@@ -310,6 +314,8 @@ def _write_orca_input(
     cpcm_cut_area:  float,
     cores_per_item: int,
     maxcore_mb:     int,
+    charge:         int = 0,
+    multiplicity:   int = 1,
 ):
     """
     Write a single ORCA input file.
@@ -335,7 +341,7 @@ def _write_orca_input(
 
         f.write("%elprop\n  Polar 1\n  Polaratom 1\nend\n\n")
 
-        f.write(f"* xyzfile 0 1 {xyz_name}\n")
+        f.write(f"* xyzfile {charge} {multiplicity} {xyz_name}\n")
 
 
 def _run_orca(
@@ -399,6 +405,8 @@ def _run_orca_with_basis(
     cores_per_item:  int,
     maxcore_mb:      int,
     orca_inputs_dir: str,
+    charge:          int = 0,
+    multiplicity:    int = 1,
 ) -> dict:
     """
     Run ORCA with default_basis; optionally retry with fallback_basis.
@@ -433,6 +441,8 @@ def _run_orca_with_basis(
         cpcm_cut_area  = cpcm_cut_area,
         cores_per_item = cores_per_item,
         maxcore_mb     = maxcore_mb,
+        charge         = charge,
+        multiplicity   = multiplicity,
     )
     # Archive .inp under lookup_id so it's identifiable after the run
     shutil.copy(
@@ -474,6 +484,8 @@ def _run_orca_with_basis(
         cpcm_cut_area  = cpcm_cut_area,
         cores_per_item = cores_per_item,
         maxcore_mb     = maxcore_mb,
+        charge         = charge,
+        multiplicity   = multiplicity,
     )
     shutil.copy(
         inp_fallback,
@@ -779,6 +791,10 @@ class OrcacosmoStage(BaseStage):
         Extends _base_args with all ORCA-specific data.
         Everything here must be JSON-serialisable.
         """
+        entry      = self.entry_map.get(item, {})
+        provenance = entry.get("provenance", {})
+        charge       = int(provenance.get("charge", 0))
+        multiplicity = int(provenance.get("multiplicity", 1))
         return {
             **self._base_args(item),
             "lookup_id":       item,
@@ -794,7 +810,9 @@ class OrcacosmoStage(BaseStage):
             "functional":      self.functional,
             "solvation":       self.solvation,
             "maxcore_mb":      self.maxcore_mb,
-            "entry":           self.entry_map.get(item, {}),
+            "entry":           entry,
+            "charge":          charge,
+            "multiplicity":    multiplicity,
         }
 
     # =========================================================================

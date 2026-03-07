@@ -110,14 +110,15 @@ def normalise_solvent_ratios(solvents: list, solute_x: float) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_mixture_inputs(
-    solute_meta:     dict,
-    solute_dir:      Path,
-    solvent_dirs:    dict,
-    n_solute_confs:  int,
-    n_solvent_confs: dict,
-    defaults:        dict,
-    temperature:     float,
-    solvents:        list,
+    solute_meta:          dict,
+    solute_dir:           Path,
+    solvent_dirs:         dict,
+    n_solute_confs:       int,
+    n_solvent_confs:      dict,
+    defaults:             dict,
+    temperature:          float,
+    solvents:             list,
+    solute_multiplicity:  int = 1,
 ) -> str:
     """
     Build a valid mixture_inputs.txt string for the openCOSMO-RS engine.
@@ -183,7 +184,7 @@ def build_mixture_inputs(
         "",
     ]
 
-    solute_mults = " ".join(["1"] * n_solute_confs)
+    solute_mults = " ".join([str(solute_multiplicity)] * n_solute_confs)
     lines.append(
         f"{inchi}\t{initial_solute_x}\t{solute_dir}\t{n_solute_confs}\t{solute_mults}"
     )

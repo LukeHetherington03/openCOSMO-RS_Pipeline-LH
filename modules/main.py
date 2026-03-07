@@ -14,7 +14,7 @@ from modules.utils.git_version import get_git_version
 # ------------------------------------------------------------
 # Choose execution mode
 # ------------------------------------------------------------
-USE_QUEUE = False   # Set to True to enqueue instead of running directly
+USE_QUEUE = True   # Set to True to enqueue instead of running directly
 
 
 def main():
@@ -39,11 +39,11 @@ def main():
 
     pipeline_spec = [
         {"stage": "cleaning", "args": {"input_csv": input_csv, "overwrite_metadata": True}},
-        {"stage": "generation", "args": {"engine": "rdkit", "n": 200}},
+        {"stage": "generation", "args": {"engine": "rdkit", "n": 5}},
         {"stage": "pruning", "args": {"n": 1}},
         {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
-        {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
-        #{"stage": "optimisation", "args": {"engine": "orca_opt_fast"}},
+        {"stage": "optimisation", "args": {"engine": "forcefield_uff"}},
+        {"stage": "optimisation", "args": {"engine": "forcefield_mmff"}},
         #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_fast"}},
         #{"stage": "optimisation", "args": {"engine": "orca_opt_final"}},
         #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_final"}},

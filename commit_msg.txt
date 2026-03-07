@@ -1,0 +1,45 @@
+Fix pipeline logging, charge/MP resolution, final_outputs; add full docs
+
+Bug fixes
+- base_stage.log() was delegating to job.log() (root stage.log); now
+  writes directly to stage_logs/stage.log — eliminates duplicate log
+- Charge sentinel changed from 0 to None (same pattern as multiplicity);
+  previously a missing charge column caused charge_source="user_input"
+  for every molecule instead of reflecting RDKit/default resolution
+- _resolve_mp() used _scalar() (numeric cast) on the melting_temp_source
+  string, converting e.g. "ChemBook" → None → "user_input"; now reads
+  the string directly
+- runner._write_final_outputs() was calling last_job.get_stage_output()
+  (a BaseStage method); Job exposes get_output_file() — fix silently
+  swallowed by except Exception: pass, causing final_outputs to never
+  receive last-stage files
+
+Pipeline warnings and final_outputs
+- _log_pipeline_warnings_summary() now scans request.log for
+  pipeline-level [WARNING] lines (resource allocator etc.) in addition
+  to per-stage logs; deduplicates within each section
+- Writes pipeline_warnings.txt into final_outputs/ at run end
+- _STAGE_EXTRA_FILES added: solubility copies .csv + .txt alongside
+  canonical .json; orcacosmo/optimisation/pruning copy their .csv
+- final_outputs/ no longer includes inputs/ dir or cleaned.csv
+
+Warning level promotions
+- Defaulting behaviour (charge absent, multiplicity absent, no melting
+  point, no solvent list, no metadata dir) promoted from INFO/CONFIG to
+  WARNING so they appear in the warnings summary
+- Cleaning stage emits per-file charge and multiplicity source breakdown
+  (user_input / rdkit_computed / default counts) as [WARNING] after
+  each molecule group
+
+Documentation
+- Deleted all outdated docs (readme, installation, configuration,
+  pipeline_architecture, execution_and_queueing, cli_reference,
+  resume_and_continuation, pipeline_overview, docs/stages/)
+- Added 7 new docs in both .md and .docx:
+    quick_start, developer_guide, arguments_guide,
+    input_csv_format, solvent_list_format, output_format, troubleshooting
+
+Data
+- New molecule metadata JSON files from live test run
+- melting_point_finder utility and melting_point_cache.json
+- betanie solvent directory

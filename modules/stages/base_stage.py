@@ -530,8 +530,9 @@ class BaseStage:
     # =========================================================================
 
     def log(self, msg: str, indent: int = 0):
-        """General info log — delegates to job for backward compat."""
-        self.job.log(msg, indent)
+        """General info log."""
+        prefix = " " * indent
+        LogHelper.info(self._stage_log, f"{prefix}{msg}")
 
     def log_info(self, msg: str):
         LogHelper.info(self._stage_log, msg)

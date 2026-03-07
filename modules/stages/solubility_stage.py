@@ -440,13 +440,14 @@ def _run_combo(
                 "Gfus_mode":    meta["Gfus_mode"],
                 "Hfus":         meta["Hfus"],
             },
-            solute_dir      = Path(solute_dir),
-            solvent_dirs    = combo_solvent_dirs,
-            n_solute_confs  = n_solute,
-            n_solvent_confs = combo_n_solvent_confs,
-            defaults        = defaults,
-            temperature     = temperature,
-            solvents        = solvents_normalised,
+            solute_dir           = Path(solute_dir),
+            solvent_dirs         = combo_solvent_dirs,
+            n_solute_confs       = n_solute,
+            n_solvent_confs      = combo_n_solvent_confs,
+            defaults             = defaults,
+            temperature          = temperature,
+            solvents             = solvents_normalised,
+            solute_multiplicity  = int(meta.get("multiplicity", 1)),
         )
     except Exception as e:
         return _failed_combo(
@@ -852,13 +853,13 @@ class SolubilityStage(BaseStage):
                 list_path   = default_path
                 source_note = "default_list.json"
                 if not list_value:
-                    self.log_config(
+                    self.log_warning(
                         "No solvent_list specified — using default_list.json"
                     )
 
         # ── Level 3: built-in water-only emergency fallback ───────────────────
         if list_path is None:
-            self.log_config(
+            self.log_warning(
                 "No solvent list available — "
                 "using built-in water-only emergency fallback"
             )
@@ -1035,6 +1036,28 @@ class SolubilityStage(BaseStage):
     def _build_args(self, item: str) -> dict:
         """item = inchi_key"""
         mol = self._molecule_map[item]
+
+        # Log multiplicity at point of use so any default is visible
+        _meta_path = os.path.join(self.metadata_dir, f"{item}.json")
+        if os.path.exists(_meta_path):
+            try:
+                with open(_meta_path) as _mf:
+                    _m = json.load(_mf)
+                _mult     = int(_m.get("multiplicity", 1))
+                _mult_src = _m.get("multiplicity_source", "default")
+                if _mult_src == "default":
+                    self.log_warning(
+                        f"[COSMO-RS] {item}: multiplicity defaulted to 1 "
+                        f"— not provided and cannot be reliably determined"
+                    )
+                else:
+                    self.log_info(
+                        f"[COSMO-RS] {item}: multiplicity={_mult} "
+                        f"(source: {_mult_src})"
+                    )
+            except Exception:
+                pass
+
         return {
             **self._base_args(item),
             "inchi_key":    item,

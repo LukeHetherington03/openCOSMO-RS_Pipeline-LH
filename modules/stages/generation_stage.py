@@ -67,7 +67,7 @@ ADDING A BACKEND
   2. Add dispatch branch in _generation_worker()
   3. Implement module-level _worker_mybackend(args: dict) -> dict
      args contains (from _base_args + _build_args):
-       item_id, inchi_key, smiles, charge, spin, seed, cores_per_item,
+       item_id, inchi_key, smiles, charge, multiplicity, seed, cores_per_item,
        num_confs, xyz_out_dir, workdir, log_path, checkpoints_dir,
        timestamp, stage, outputs_dir,
        <plus any tool paths, e.g. crest_exe, obabel_exe>
@@ -204,7 +204,7 @@ def _parse_multimodel_xyz(path):
 
 
 def _split_crest_xyz(crest_xyz, inchi_key, smiles, xyz_out_dir,
-                     timestamp, source_row, charge, spin, gfn_mode, crest_version):
+                     timestamp, source_row, charge, multiplicity, gfn_mode, crest_version):
     """
     Parse crest_conformers.xyz (multi-model XYZ) and write individual
     conformer XYZ files.  Returns list of ConformerRecord.to_dict().
@@ -261,7 +261,7 @@ def _split_crest_xyz(crest_xyz, inchi_key, smiles, xyz_out_dir,
                 "generation_timestamp": timestamp,
                 "source_row":           source_row,
                 "charge":               charge,
-                "spin":                 spin,
+                "multiplicity":         multiplicity,
             },
         )
         records.append(record.to_dict())
@@ -336,7 +336,7 @@ def _worker_rdkit(args: dict) -> dict:
     inchi_key      = args["inchi_key"]
     smiles         = args["smiles"]
     charge         = args["charge"]
-    spin           = args["spin"]
+    multiplicity   = args["multiplicity"]
     seed           = args["seed"]
     cores_per_item = args["cores_per_item"]
     num_confs      = args["num_confs"]
@@ -410,7 +410,7 @@ def _worker_rdkit(args: dict) -> dict:
                 "generation_timestamp": timestamp,
                 "source_row":           args.get("source_row"),
                 "charge":               charge,
-                "spin":                 spin,
+                "multiplicity":         multiplicity,
             },
         ).to_dict())
 
@@ -441,7 +441,7 @@ def _worker_crest(args: dict) -> dict:
     inchi_key      = args["inchi_key"]
     smiles         = args["smiles"]
     charge         = args["charge"]
-    spin           = args["spin"]
+    multiplicity   = args["multiplicity"]
     seed           = args["seed"]
     cores_per_item = args["cores_per_item"]
     num_confs      = args["num_confs"]
@@ -501,7 +501,7 @@ def _worker_crest(args: dict) -> dict:
         "--nconf",   str(num_confs),
         "--ewin",    "6",
         "--chrg",    str(charge),
-        "--uhf",     str(max(0, spin - 1)),
+        "--uhf",     str(max(0, multiplicity - 1)),
         "--nthreads", str(cores_per_item),
     ]
 
@@ -546,7 +546,7 @@ def _worker_crest(args: dict) -> dict:
         timestamp     = timestamp,
         source_row    = args.get("source_row"),
         charge        = charge,
-        spin          = spin,
+        multiplicity  = multiplicity,
         gfn_mode      = gfn_mode,
         crest_version = crest_version,
     )
@@ -587,7 +587,7 @@ def _worker_openbabel(args: dict) -> dict:
     inchi_key         = args["inchi_key"]
     smiles            = args["smiles"]
     charge            = args["charge"]
-    spin              = args["spin"]
+    multiplicity      = args["multiplicity"]
     seed              = args["seed"]
     num_confs         = args["num_confs"]
     xyz_out_dir       = args["xyz_out_dir"]
@@ -745,7 +745,7 @@ def _worker_openbabel(args: dict) -> dict:
                 "generation_timestamp": timestamp,
                 "source_row":           args.get("source_row"),
                 "charge":               charge,
-                "spin":                 spin,
+                "multiplicity":         multiplicity,
             },
         ).to_dict())
 
@@ -934,7 +934,13 @@ class GenerationStage(BaseStage):
     def _build_args(self, inchi_key: str) -> dict:
         """Build the fully self-contained args dict for one molecule."""
         idx, smiles, row = self._valid_rows_map[inchi_key]
-        charge, spin = self._get_charge_spin(inchi_key, self._metadata_index)
+        charge, multiplicity, charge_source, multiplicity_source = self._get_charge_multiplicity(inchi_key, self._metadata_index)
+
+        log_fn = self.log_warning if "default" in (charge_source, multiplicity_source) else self.log_info
+        log_fn(
+            f"[CHARGE] {inchi_key}: charge={charge} ({charge_source}), "
+            f"multiplicity={multiplicity} ({multiplicity_source})"
+        )
 
         args = self._base_args(inchi_key)
         args.update({
@@ -942,7 +948,7 @@ class GenerationStage(BaseStage):
             "inchi_key":     inchi_key,
             "smiles":        smiles,
             "charge":        charge,
-            "spin":          spin,
+            "multiplicity":  multiplicity,
             "seed":          self.seed,
             "gfn":           self.gfn,
             "num_confs":     self._num_confs,
@@ -1077,7 +1083,7 @@ class GenerationStage(BaseStage):
         meta_dir = self.config.get("constant_files", {}).get("metadata_dir")
 
         if not meta_dir or not os.path.isdir(meta_dir):
-            self.log_info("No metadata_dir found — using defaults: charge=0, spin=1")
+            self.log_warning("No metadata_dir found — using defaults: charge=0, multiplicity=1")
             return metadata_index
 
         for fname in os.listdir(meta_dir):
@@ -1093,19 +1099,21 @@ class GenerationStage(BaseStage):
         self.log_info(f"Loaded metadata for {len(metadata_index)} molecules")
         return metadata_index
 
-    def _get_charge_spin(self, inchi_key: str, metadata_index: dict) -> tuple[int, int]:
-        """Resolve charge and spin. Hierarchy: parameters > metadata > defaults."""
+    def _get_charge_multiplicity(self, inchi_key: str, metadata_index: dict) -> tuple[int, int, str, str]:
+        """Resolve charge and multiplicity. Hierarchy: parameters > metadata > defaults."""
         params = self.parameters
         meta   = metadata_index.get(inchi_key, {})
         charge = (
             params.get("charge") if params.get("charge") is not None
             else meta.get("charge", 0)
         )
-        spin = (
-            params.get("spin") if params.get("spin") is not None
-            else meta.get("spin", 1)
+        charge_source = "user_param" if params.get("charge") is not None else meta.get("charge_source", "default")
+        multiplicity = (
+            params.get("multiplicity") if params.get("multiplicity") is not None
+            else meta.get("multiplicity", 1)
         )
-        return int(charge), int(spin)
+        multiplicity_source = "user_param" if params.get("multiplicity") is not None else meta.get("multiplicity_source", "default")
+        return int(charge), int(multiplicity), charge_source, multiplicity_source
 
     # =========================================================================
     # Conformer count heuristic

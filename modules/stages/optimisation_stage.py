@@ -173,6 +173,8 @@ def _optimisation_worker(args: dict) -> dict:
     worker_pid  = os.getpid()
 
     item_id        = args["item_id"]
+    charge         = args.get("charge", 0)
+    multiplicity   = args.get("multiplicity", 1)
     lookup_id      = args["lookup_id"]
     workdir        = args["workdir"]
     outputs_dir    = args["outputs_dir"]
@@ -213,6 +215,8 @@ def _optimisation_worker(args: dict) -> dict:
             max_iter       = max_iter,
             cores_per_item = cores_per_item,
             config         = config,
+            charge         = charge,
+            multiplicity   = multiplicity,
         )
 
         t_wall_end = time.perf_counter()
@@ -311,6 +315,8 @@ def _run_backend(
     max_iter:       int,
     cores_per_item: int,
     config:         dict,
+    charge:         int = 0,
+    multiplicity:   int = 1,
 ) -> dict:
     family = engine_spec["family"]
 
@@ -324,6 +330,8 @@ def _run_backend(
             level          = level,
             cores_per_item = cores_per_item,
             config         = config,
+            charge         = charge,
+            multiplicity   = multiplicity,
         )
     if family == "gxtb":
         return _backend_gxtb(
@@ -336,6 +344,8 @@ def _run_backend(
             max_iter       = max_iter,
             cores_per_item = cores_per_item,
             config         = config,
+            charge         = charge,
+            multiplicity   = multiplicity,
         )
     if family == "xtb":
         return _backend_xtb(
@@ -348,6 +358,8 @@ def _run_backend(
             max_iter       = max_iter,
             cores_per_item = cores_per_item,
             config         = config,
+            charge         = charge,
+            multiplicity   = multiplicity,
         )
     if family == "forcefield":
         return _backend_forcefield(
@@ -413,6 +425,8 @@ def _backend_orca(
     level:          str,
     cores_per_item: int,
     config:         dict,
+    charge:         int = 0,
+    multiplicity:   int = 1,
 ) -> dict:
     # Short stable base name avoids filesystem path-length limits when
     # InChIKeys are used.  The per-item scratch_dir provides uniqueness.
@@ -458,7 +472,7 @@ def _backend_orca(
             f"! {method} {opt_kw}"
         )
 
-    lines += [method_line, "", f'%base "{lookup}"', "", "* xyz 0 1"]
+    lines += [method_line, "", f'%base "{lookup}"', "", f"* xyz {charge} {multiplicity}"]
 
     with open(input_xyz) as xyz_f:
         xyz_lines = xyz_f.readlines()
@@ -511,6 +525,8 @@ def _backend_gxtb(
     max_iter:       int,
     cores_per_item: int,
     config:         dict,
+    charge:         int = 0,
+    multiplicity:   int = 1,
 ) -> dict:
     xtb_bin  = config["xtb"]["executable"]
     gxtb_bin = config["gxtb"]["executable"]
@@ -547,6 +563,8 @@ def _backend_gxtb(
         "--driver", driver_string,
         *opt_flag,
         "--iterations", str(max_iter),
+        "--chrg", str(charge),
+        "--uhf",  str(multiplicity - 1),
     ]
 
     run_status = "ok"
@@ -585,6 +603,8 @@ def _backend_xtb(
     max_iter:       int,
     cores_per_item: int,
     config:         dict,
+    charge:         int = 0,
+    multiplicity:   int = 1,
 ) -> dict:
     xtb_bin = config["xtb"]["executable"]
     gfn     = engine_spec.get("gfn", 2)
@@ -616,6 +636,8 @@ def _backend_xtb(
         "--opt",
         "--gfn", str(gfn),
         "--iterations", str(iters),
+        "--chrg", str(charge),
+        "--uhf",  str(multiplicity - 1),
     ]
 
     run_status = "ok"
@@ -918,6 +940,9 @@ class OptimisationStage(BaseStage):
         Everything must be JSON-serialisable / picklable.
         """
         record = self._record_map[item]
+        provenance   = record.get("provenance", {})
+        charge       = int(provenance.get("charge", 0))
+        multiplicity = int(provenance.get("multiplicity", 1))
         return {
             **self._base_args(item),
             "lookup_id":    item,
@@ -928,6 +953,8 @@ class OptimisationStage(BaseStage):
             "keep_scratch": self.keep_scratch,
             "config":       self.config,
             "record":       record,
+            "charge":       charge,
+            "multiplicity": multiplicity,
         }
 
     # =========================================================================

@@ -1,0 +1,401 @@
+{
+  "RNYZJZKPGHQTJR-UHFFFAOYSA-N": {
+    "timestamp": 1772543338.6779003,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "108-28-1"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "108-28-1"
+      }
+    }
+  },
+  "VVQNEPGJFQJSBK-UHFFFAOYSA-N": {
+    "timestamp": 1772543340.6627965,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 225.14999999999998,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "80-62-6"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "80-62-6"
+      }
+    }
+  },
+  "JIGUQPWFLRLWPJ-UHFFFAOYSA-N": {
+    "timestamp": 1772543342.7168198,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 201.92777777777775,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "140-88-5"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "140-88-5"
+      }
+    }
+  },
+  "CFVWNXQPGQOHRJ-UHFFFAOYSA-N": {
+    "timestamp": 1772543344.601878,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 212.03888888888886,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "106-63-8"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "106-63-8"
+      }
+    }
+  },
+  "CQEYYJKEWSMYFG-UHFFFAOYSA-N": {
+    "timestamp": 1772543346.4353523,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 208.53888888888886,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "141-32-2"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "141-32-2"
+      }
+    }
+  },
+  "NDWUBGAGUCISDV-UHFFFAOYSA-N": {
+    "timestamp": 1772543348.2064407,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "2478-10-6"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "2478-10-6"
+      }
+    }
+  },
+  "LNCPIMCVTKXXOY-UHFFFAOYSA-N": {
+    "timestamp": 1772543349.8532302,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "142-09-6"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "142-09-6"
+      }
+    }
+  },
+  "GOXQRTZXKQZDDN-UHFFFAOYSA-N": {
+    "timestamp": 1772543351.58398,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 183.14999999999998,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "103-11-7"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "103-11-7"
+      }
+    }
+  },
+  "FTALTLPZDVFJSS-UHFFFAOYSA-N": {
+    "timestamp": 1772543353.1925771,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 207.14999999999998,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "7328-17-8"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "7328-17-8"
+      }
+    }
+  },
+  "LVGFPWDANALGOY-UHFFFAOYSA-N": {
+    "timestamp": 1772543354.864427,
+    "sources": {
+      "pubchem": {
+        "melting_temp": 173.14999999999998,
+        "confidence": 0.6,
+        "raw": "pubchem",
+        "found_but_no_mp": false,
+        "cas": "15-11-9"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "15-11-9"
+      }
+    }
+  },
+  "QGTBRAFPWNISIJ-UHFFFAOYSA-N": {
+    "timestamp": 1772543356.4268844,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "7328-22-5"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "7328-22-5"
+      }
+    }
+  },
+  "RBFPEAGEJJSYCX-UHFFFAOYSA-N": {
+    "timestamp": 1772543358.0300982,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "39670-09-2"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "39670-09-2"
+      }
+    }
+  },
+  "PBOSTUDLECTMNL-UHFFFAOYSA-N": {
+    "timestamp": 1772543359.617869,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "2156-97-0"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "2156-97-0"
+      }
+    }
+  },
+  "RHNJVKIVSXGYBD-UHFFFAOYSA-N": {
+    "timestamp": 1772543361.2446182,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "13-11-9"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "13-11-9"
+      }
+    }
+  },
+  "XZHNPVKXBNDGJD-UHFFFAOYSA-N": {
+    "timestamp": 1772543362.8279655,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "21643-42-5"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "21643-42-5"
+      }
+    }
+  },
+  "HYQASEVIBPSPMK-UHFFFAOYSA-N": {
+    "timestamp": 1772543364.4451087,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "13-11-9"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "13-11-9"
+      }
+    }
+  },
+  "TVWTZAGVNBPXHU-FOCLMDBBSA-N": {
+    "timestamp": 1772543366.0530815,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "12-10-8"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "12-10-8"
+      }
+    }
+  },
+  "DLNMMVNCTSAPOW-LMKNCCGPSA-M": {
+    "timestamp": 1772543367.5668793,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "78181-99-4"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "78181-99-4"
+      }
+    }
+  },
+  "AKRXZXNNMQZCSA-IVGCKTBMSA-N": {
+    "timestamp": 1772543369.157866,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "10-16-8"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "10-16-8"
+      }
+    }
+  },
+  "MTPIZGPBYCHTGQ-UHFFFAOYSA-N": {
+    "timestamp": 1772543370.738986,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "28-12-9"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "28-12-9"
+      }
+    }
+  },
+  "DMQYPVOQAARSNF-UHFFFAOYSA-N": {
+    "timestamp": 1772543372.2558558,
+    "sources": {
+      "pubchem": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "pubchem",
+        "found_but_no_mp": true,
+        "cas": "28-13-7"
+      },
+      "nist": {
+        "melting_temp": null,
+        "confidence": 0.0,
+        "raw": "no_tfus",
+        "found_but_no_mp": true,
+        "cas": "28-13-7"
+      }
+    }
+  }
+}
