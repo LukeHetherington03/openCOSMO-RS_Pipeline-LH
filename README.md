@@ -1,250 +1,168 @@
-# openCOSMO‑RS Pipeline
+# openCOSMO-RS Pipeline
 
-A fully reproducible, deterministic, and extensible scientific workflow engine for:
-
-- Molecular cleaning & metadata generation  
-- Conformer generation  
-- Conformer pruning  
-- Geometry optimisation (XTB, gXTB, ORCA)  
-- ORCA COSMO calculations  
-- COSMO‑RS solubility prediction  
-
-The pipeline is designed for **robustness**, **traceability**, and **scientific reproducibility**, with:
-
-- Canonical stage inputs/outputs  
-- Deterministic job chaining  
-- Full provenance tracking  
-- Resume & continuation support  
-- Config‑driven execution  
-- Git version embedding  
+A fully reproducible, config-driven workflow for predicting molecular solubility using conformer generation, quantum chemistry, and COSMO-RS modelling.
 
 ---
 
-## 🚀 Quickstart
+## What it does
 
-### 1. Prepare your environment
+The pipeline automates the full solubility prediction workflow:
 
-Install dependencies (RDKit, ORCA, XTB, gXTB, CREST, COSMO‑RS bindings).  
-See `docs/installation.md` for full details.
+1. **Cleaning** — validate SMILES, generate InChIKeys, resolve charge/multiplicity/melting point, compute physchem descriptors
+2. **Generation** — generate 3D conformers (RDKit, CREST, or OpenBabel)
+3. **Pruning** — filter conformers by energy window and RMSD (optional)
+4. **Optimisation** — geometry optimise conformers (gXTB, XTB, ORCA DFT, or force fields)
+5. **ORCA COSMO** — run ORCA CPCM single-point calculations, produce `.orcacosmo` surface files
+6. **Solubility** — run openCOSMO-RS against a configurable solvent list, apply saturation correction
 
-### 2. Configure paths
+All stages are checkpointed and resumable. A background queue worker manages execution. A CLI handles submission and monitoring.
 
-Edit:
+---
+
+## Quick start
+
+See [docs/quick_start.md](docs/quick_start.md) for the full setup guide. In brief:
+
+**1. Place software and resources in your home directory** (not the project folder — long paths cause silent truncation in XTB/gXTB):
 
 ```
-config/paths.json
+~/software/orca_6_1_1/orca
+~/software/xtb/bin/xtb
+~/software/g-xtb-main/binary/gxtb
+~/software/crest/crest
+~/resources/openCOSMO-RS_py/src/
+~/resources/openCOSMO-RS_cpp/bindings/
 ```
 
-to point to:
-
-- ORCA executable  
-- XTB/gXTB executables  
-- CREST  
-- COSMO‑RS Python + C++ bindings  
-- CONSTANT_FILES directory  
-- pipeline_data directory  
-
-### 3. Run the pipeline
+**2. Install Python dependencies:**
 
 ```bash
-python3 -m modules.main
+pip install -r requirements.txt
 ```
 
-This will:
-
-- Create a new Request  
-- Create the first Job  
-- Execute each stage sequentially  
-- Produce a full provenance trail  
-
-### 4. Resume a request
-
-If a job was interrupted (Ctrl+C, crash, HPC preemption):
+**3. Add the CLI alias to `~/.bashrc`:**
 
 ```bash
-python3 -m modules.main_resume
+alias pl='python3 -m modules.cli.cli'
 ```
 
-The pipeline will:
+**4. Update `config/paths.json`** with your software paths.
 
-- Skip completed stages  
-- Resume the interrupted job  
-- Continue normally  
-
-### 5. Continue from a previous request
-
-To start a new pipeline using the output of a previous job:
+**5. Validate your environment:**
 
 ```bash
-python3 -m modules.main_continue
+pl env check
 ```
 
----
-
-## 📂 Directory Structure
-
-```
-pipeline_data/
-    requests/
-        R-<timestamp>-<title>/
-            request.json
-            pipeline_state.json
-            request.log
-            jobs/
-                J-<timestamp>-<stage>/
-                    inputs/
-                    outputs/
-                    job_state.json
-                    stage.log
-```
-
-### Key files:
-
-- **request.json** — immutable record of user intent  
-- **pipeline_state.json** — current stage, last completed stage  
-- **job_state.json** — item‑level progress (pending/completed/failed)  
-- **stage.log** — detailed execution log  
-- **canonical outputs** — e.g., `cleaned.csv`, `energies.json`, `orcacosmo_summary.json`  
-
----
-
-## 🧠 Pipeline Stages
-
-### 1. Cleaning
-
-- Reads raw CSVs  
-- Standardises headers  
-- Canonicalises SMILES  
-- Generates InChIKeys  
-- Computes physchem descriptors  
-- Writes molecule metadata (local + global)  
-- Output: `cleaned.csv`
-
-### 2. Generation
-
-- Generates conformers (RDKit or CREST)  
-- Output: `energies.json`
-
-### 3. Pruning
-
-- Selects top‑N conformers  
-- Output: `energies.json`
-
-### 4. Optimisation
-
-- Runs ORCA, XTB, or gXTB  
-- Checkpointed  
-- Fully resumable  
-- Output: `energies.json`
-
-### 5. ORCA COSMO
-
-- Writes ORCA input files  
-- Runs TZVPD → fallback TZVP  
-- Parses log/cpcm/cpcm_corr  
-- Reconstructs `.orcacosmo` files  
-- Output: `orcacosmo_summary.json`
-
-### 6. Solubility
-
-- Runs COSMO‑RS  
-- Output: `solubility_results.json`
-
----
-
-## 🔁 Resume & Continuation
-
-### Resume (same request)
-
-If a job is interrupted:
-
-- `job_state.json` tracks pending items  
-- `pipeline_state.json` tracks current stage  
-
-Resume with:
+**6. Start the worker:**
 
 ```bash
-python3 -m modules.main_resume
+pl q start
 ```
 
-### Continue (new request)
-
-To start a new pipeline using the output of a previous job:
+**7. Submit a request:**
 
 ```bash
-python3 -m modules.main_continue
-```
-
-This creates a new Request with:
-
-- New request ID  
-- New job lineage  
-- Stage 0 input = previous job’s canonical output  
-
----
-
-## 🧬 Provenance & Reproducibility
-
-Every metadata file includes:
-
-- Git version (`main@abc1234`)  
-- Cleaning timestamp  
-- Request ID  
-- Job ID  
-- Source file  
-- Pipeline version  
-
-Every stage:
-
-- Has a canonical input  
-- Has a canonical output  
-- Never guesses or auto‑detects  
-- Is deterministic  
-
----
-
-## 🛠 Adding a New Stage
-
-See `docs/developer_guide.md` for full details.
-
-In short:
-
-1. Create `modules/stages/<name>_stage.py`
-2. Subclass `BaseStage`
-3. Implement:
-   - `execute()`
-   - `set_stage_output()`
-   - `require_file()`
-4. Add canonical output to `Job.STAGE_OUTPUTS`
-5. Add stage to pipeline spec
-
----
-
-## 🧪 Example
-
-```python
-pipeline_spec = [
-    {"stage": "cleaning", "args": {"input_csv": "data.csv"}},
-    {"stage": "generation", "args": {"engine": "rdkit"}},
-    {"stage": "pruning", "args": {"n": 1}},
-    {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
-    {"stage": "orcacosmo", "args": {}},
-    {"stage": "solubility", "args": {}},
-]
+pl r submit request.json
 ```
 
 ---
 
-## 📄 License
+## Request format
 
-MIT or your preferred license.
+Create a `request.json`:
+
+```json
+{
+  "request_name": "my_run",
+  "input_csv": "/path/to/molecules.csv",
+  "pipeline_sequence": ["cleaning", "generation", "optimisation", "orcacosmo", "solubility"],
+  "stage_args": [
+    {},
+    {"engine": "rdkit", "num_confs": 20},
+    {"engine": "gxtb_opt_normal"},
+    {"default_basis": "TZVP"},
+    {}
+  ]
+}
+```
+
+`pipeline_sequence` and `stage_args` are parallel lists — `stage_args[i]` applies to `pipeline_sequence[i]`.
 
 ---
 
-## 👤 Authors
+## Common commands
 
-Luke Hetherington  
-(openCOSMO‑RS Pipeline Architect)
+```bash
+pl q start                  # Start the queue worker
+pl q stop                   # Graceful stop
+pl q status                 # Worker state and queue counts
+
+pl r submit request.json    # Submit a new request
+pl r list                   # List all requests
+pl r status <id>            # Pipeline state for a request
+pl r logs <id>              # Stage logs
+pl r info <id>              # Detailed request info
+
+pl env check                # Full environment validation
+pl env software             # Validate executables only
+pl env resources            # Validate openCOSMO-RS paths
+```
 
 ---
 
+## Outputs
+
+When a full pipeline completes, results are in:
+
+```
+pipeline_data/requests/<id>/final_outputs/
+    solubility_results.json          machine-readable results
+    solubility_results.csv           flat per-molecule/solvent table
+    solubility_human_summary.txt     aligned human-readable table
+    molecule_metadata/               per-molecule JSON descriptors
+    pipeline_warnings.txt            all warnings from the run
+```
+
+---
+
+## Data directory layout
+
+```
+pipeline_data/requests/<request_id>/
+    request.json              submitted pipeline spec
+    request_state.json        pipeline state (stage, status)
+    request.log               high-level request log
+    jobs/
+        J-<timestamp>-<stage>/
+            inputs/           canonical input from previous stage
+            outputs/          canonical output + checkpoints
+            stage_logs/
+                stage.log     full stage execution log
+                stage_context.log
+            job_state.json    item-level progress
+    final_outputs/            collected results and warnings
+```
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/quick_start.md](docs/quick_start.md) | Setup, installation, first run |
+| [docs/pipeline_overview.md](docs/pipeline_overview.md) | Scientific workflow, execution model, design principles |
+| [docs/arguments_guide.md](docs/arguments_guide.md) | All pipeline parameters and stage arguments |
+| [docs/input_csv_format.md](docs/input_csv_format.md) | Input CSV column reference |
+| [docs/output_format.md](docs/output_format.md) | Output file schemas |
+| [docs/solvent_list_format.md](docs/solvent_list_format.md) | Solvent list format and available solvents |
+| [docs/developer_guide.md](docs/developer_guide.md) | Architecture, adding backends/stages, BaseStage contract |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common failures and diagnostics |
+
+All documents are available as `.md` and `.docx`.
+
+---
+
+## Authors
+
+Luke Hetherington
