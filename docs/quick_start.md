@@ -172,28 +172,30 @@ If `charge` or `multiplicity` are absent, a pipeline warning is emitted describi
 
 ## 9. Submit a request
 
-Create a `request.json` file:
+Edit `modules/main.py` to set your input CSV path, run title, and pipeline stages:
 
-```json
-{
-  "request_name": "my_first_run",
-  "input_csv": "/path/to/your/molecules.csv",
-  "pipeline_sequence": ["cleaning", "generation", "optimisation", "orcacosmo", "solubility"],
-  "stage_args": [
-    {},
-    {"engine": "rdkit", "num_confs": 20},
-    {"engine": "gxtb_opt_normal"},
-    {"default_basis": "TZVP"},
-    {}
-  ]
-}
+```python
+input_csv = "/path/to/your/molecules.csv"
+title = "my_first_run"
+
+pipeline_spec = [
+    {"stage": "cleaning",     "args": {"input_csv": input_csv, "overwrite_metadata": True}},
+    {"stage": "generation",   "args": {"engine": "rdkit", "n": 20}},
+    {"stage": "pruning",      "args": {"n": 1}},
+    {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
+    {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
+    {"stage": "orcacosmo",    "args": {}},
+    {"stage": "solubility",   "args": {}},
+]
 ```
 
-Submit it:
+Set `USE_QUEUE = True` at the top of `main.py` to enqueue for the background worker (recommended), or `False` to run directly in the foreground. Then run:
 
 ```bash
-pl r submit /path/to/request.json
+python3 -m modules.main
 ```
+
+> **Alternative:** `pl r submit <request.json>` can also be used to submit a pre-built request JSON directly, but editing `main.py` is the recommended approach as it is easier to configure.
 
 Monitor progress:
 
@@ -232,7 +234,7 @@ pl q list                    # Pending and running requests
 pl r list                    # All requests
 pl r status <id>             # Pipeline state for a request
 pl r logs <id>               # Stage logs
-pl r submit <request.json>   # Submit a new request
+pl r submit <request.json>   # Submit a request directly from JSON (alternative to main.py)
 
 pl env check                 # Full environment validation
 pl env software              # Check executables only

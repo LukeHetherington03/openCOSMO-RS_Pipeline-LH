@@ -65,7 +65,9 @@ Not all stages are required in every run. The pipeline supports partial sequence
 The pipeline is driven by a **queue worker** — a background process that picks up submitted requests and executes them one at a time.
 
 ```
-User submits request.json  →  pl r submit request.json
+Edit modules/main.py  →  python3 -m modules.main   (recommended)
+                                    |
+                         (alternative: pl r submit request.json)
                                     |
                                     v
                            Queue (SQLite)
@@ -208,11 +210,17 @@ pl q start
 pl q stop
 pl q status
 
-# Submit and monitor requests
-pl r submit request.json
+# Configure and run (primary approach)
+# Edit modules/main.py, then:
+python3 -m modules.main
+
+# Monitor requests
 pl r list
 pl r status <id>
 pl r logs <id>
+
+# Alternative: submit directly from a request JSON
+pl r submit request.json
 
 # Environment validation
 pl env check

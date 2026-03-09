@@ -62,8 +62,6 @@ pl q start
 
 ---
 
-## Submitting a run
-
 Edit `modules/main.py` to configure your pipeline and input data, then run:
 
 ```bash

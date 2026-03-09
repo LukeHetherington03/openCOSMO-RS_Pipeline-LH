@@ -6,7 +6,7 @@ openCOSMO-RS Pipeline
 
 ## Contents
 
-1. [Pipeline spec (`request.json`)](#1-pipeline-spec-requestjson)
+1. [Pipeline spec (`main.py`)](#1-pipeline-spec-mainpy)
 2. [Parameter hierarchy](#2-parameter-hierarchy)
 3. [Global parameters](#3-global-parameters)
 4. [Cleaning stage parameters](#4-cleaning-stage-parameters)
@@ -19,7 +19,7 @@ openCOSMO-RS Pipeline
 
 ---
 
-## 1. Pipeline spec (`request.json`)
+## 1. Pipeline spec (`main.py`)
 
 The pipeline is configured in `modules/main.py` and submitted by running `python3 -m modules.main`. The `pipeline_spec` is a list of stage dicts — each entry specifies a stage name and its arguments:
 
@@ -90,19 +90,19 @@ You can run partial pipelines by starting mid-sequence. The first stage must rec
 Each stage resolves its parameters in order of precedence (highest wins):
 
 ```
-1. stage_args entry in request.json          (runtime override)
+1. "args" dict in the pipeline_spec entry    (runtime override)
 2. request-level "strict" / "resources"      (cross-stage overrides)
 3. stage defaults JSON  (e.g. optimisation_defaults.json)
 4. BaseStage / hard-coded fallback
 ```
 
-For example, if `optimisation_defaults.json` has `"engine": "gxtb_opt_normal"` and the request's `stage_args` entry has `"engine": "orca_opt_fast"`, the request-level value wins.
+For example, if `optimisation_defaults.json` has `"engine": "gxtb_opt_normal"` and the `args` dict for that stage has `"engine": "orca_opt_fast"`, the pipeline_spec value wins.
 
 ---
 
 ## 3. Global parameters
 
-These can be set at the top level of `request.json` and apply across stages.
+These can be set in the `args` dict of any stage entry in `pipeline_spec` and apply to that stage.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -160,7 +160,7 @@ Generates 3D conformers for each unique molecule in `cleaned.csv`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `engine` | string | `"rdkit"` | Conformer generation backend: `"rdkit"`, `"crest"`, `"openbabel"` |
-| `num_confs` | int | engine-dependent | Maximum number of conformers to generate |
+| `n` | int | engine-dependent | Maximum number of conformers to generate |
 | `seed` | int | `42` | Random seed for reproducibility |
 | `gfn` | string | `"gfn2"` | GFN version for CREST (e.g. `"gfn2"`) |
 | `strict` | bool | `false` | Abort on first per-molecule failure |
@@ -333,13 +333,13 @@ Resource allocation can be overridden at the request level or per-stage.
 
 ### Global resource override
 
-Set in the top-level `resources` dict in `request.json`:
+Set in the `parameters["resources"]` dict in `main.py`:
 
-```json
-{
-  "resources": {
-    "cpus": 16
-  }
+```python
+parameters = {
+    "title": "my_run",
+    "resources": {"cpus": 16, "memory_gb": 64},
+    "config": config,
 }
 ```
 
@@ -349,13 +349,10 @@ Set in the top-level `resources` dict in `request.json`:
 
 ### Per-stage resource override
 
-Set in the relevant `stage_args` entry:
+Set in the `args` dict of the relevant stage entry in `pipeline_spec`:
 
-```json
-{
-  "cores_per_item": 4,
-  "n_workers": 5
-}
+```python
+{"stage": "optimisation", "args": {"engine": "gxtb_opt_normal", "cores_per_item": 4, "n_workers": 5}}
 ```
 
 | Parameter | Description |
@@ -366,9 +363,9 @@ Set in the relevant `stage_args` entry:
 ### Resource allocation hierarchy
 
 ```
-1. stage_args["cores_per_item"]          per-stage runtime override
-2. stage_args["n_workers"]               per-stage runtime override
-3. resources["cpus"]                     global runtime ceiling
+1. pipeline_spec args["cores_per_item"]  per-stage runtime override
+2. pipeline_spec args["n_workers"]       per-stage runtime override
+3. parameters["resources"]["cpus"]       global runtime ceiling
 4. config/resource_allocation.json       machine configuration
 5. psutil (CPU count)                    automatic fallback
 ```

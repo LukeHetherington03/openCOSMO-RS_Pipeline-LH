@@ -13,5 +13,5 @@ python-dateutil
 pytz
 pyarrow
 rdkit
-openbabel
+openbabel-wheel
 PySocks
