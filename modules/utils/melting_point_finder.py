@@ -1,7 +1,4 @@
-import os
 import re
-import json
-import time
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
@@ -31,34 +28,6 @@ class MeltingPointFinder:
 
     NIST_BASE_URL = "https://webbook.nist.gov/cgi/cbook.cgi"
 
-    CACHE_PATH = (
-        "/home/lunet/cglh4/openCOSMO-RS_Pipeline-LH/CONSTANT_FILES/melting_point_cache.json"
-    )
-    CACHE_TTL = 30 * 24 * 3600  # 30 days
-
-    def __init__(self):
-        self.cache = self._load_cache()
-
-    # ---------------- Cache ----------------
-
-    def _load_cache(self) -> Dict:
-        if not os.path.exists(self.CACHE_PATH):
-            return {}
-        try:
-            with open(self.CACHE_PATH, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _save_cache(self) -> None:
-        os.makedirs(os.path.dirname(self.CACHE_PATH), exist_ok=True)
-        with open(self.CACHE_PATH, "w") as f:
-            json.dump(self.cache, f, indent=2)
-
-    def _is_fresh(self, entry: Dict) -> bool:
-        ts = entry.get("timestamp")
-        return bool(ts) and (time.time() - ts) < self.CACHE_TTL
-
     # ---------------- PubChem: InChIKey → CID ----------------
 
     def _pubchem_cid_from_inchikey(self, inchikey: str) -> Optional[int]:
@@ -67,6 +36,15 @@ class MeltingPointFinder:
             data = r.json()
             cids = data.get("IdentifierList", {}).get("CID", [])
             return cids[0] if cids else None
+        except Exception:
+            return None
+
+    # ---------------- PubChem: CID → full record ----------------
+
+    def _pubchem_record(self, cid: int) -> Optional[dict]:
+        try:
+            r = requests.get(self.PUBCHEM_RECORD_URL.format(cid), timeout=10)
+            return r.json()
         except Exception:
             return None
 
@@ -240,21 +218,6 @@ class MeltingPointFinder:
     def get_all_sources(self, inchikey: str) -> Dict[str, MeltingPointResult]:
         inchikey = inchikey.strip().upper()
 
-        # Cache
-        if inchikey in self.cache and self._is_fresh(self.cache[inchikey]):
-            entry = self.cache[inchikey]["sources"]
-            return {
-                src: MeltingPointResult(
-                    melting_temp=v.get("melting_temp"),
-                    source=src,
-                    confidence=v.get("confidence", 0.0),
-                    raw=v.get("raw"),
-                    found_but_no_mp=v.get("found_but_no_mp", False),
-                    cas=v.get("cas"),
-                )
-                for src, v in entry.items()
-            }
-
         # PubChem
         mp_pubchem, cas, raw = self._pubchem_get_mp_and_cas(inchikey)
         if mp_pubchem is None:
@@ -268,28 +231,10 @@ class MeltingPointFinder:
         nist_res = self._nist_get_mp(cas)
         nist_res.cas = cas
 
-        results = {
+        return {
             "pubchem": pubchem_res,
             "nist": nist_res,
         }
-
-        # Cache write
-        self.cache[inchikey] = {
-            "timestamp": time.time(),
-            "sources": {
-                name: {
-                    "melting_temp": res.melting_temp,
-                    "confidence": res.confidence,
-                    "raw": res.raw,
-                    "found_but_no_mp": res.found_but_no_mp,
-                    "cas": res.cas,
-                }
-                for name, res in results.items()
-            },
-        }
-        self._save_cache()
-
-        return results
 
     def get_best(self, inchikey: str) -> MeltingPointResult:
         all_res = self.get_all_sources(inchikey)
