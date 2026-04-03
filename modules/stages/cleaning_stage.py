@@ -847,8 +847,13 @@ class CleaningStage(BaseStage):
             if raw_mult is not None and str(raw_mult).strip() not in ("", "nan", "None"):
                 multiplicity        = int(raw_mult)
                 multiplicity_source = "user_input"
-            elif mol is not None and Descriptors.NumRadicalElectrons(mol) == 0:
-                multiplicity        = 1
+            elif mol is not None:
+                # Count electrons the same way as the IC legacy pipeline
+                # (ConformerGenerator_IC.py lines 105-115): sum atomic numbers
+                # over all atoms including explicit H, subtract formal charge.
+                mol_h      = Chem.AddHs(mol)
+                n_electrons = sum(a.GetAtomicNum() for a in mol_h.GetAtoms())
+                multiplicity        = 1 if (n_electrons - charge) % 2 == 0 else 2
                 multiplicity_source = "rdkit_computed"
             else:
                 multiplicity        = 1
