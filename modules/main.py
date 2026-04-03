@@ -12,9 +12,11 @@ from modules.utils.git_version import get_git_version
 
 
 # ------------------------------------------------------------
-# Choose execution mode
+# Execution options
 # ------------------------------------------------------------
-USE_QUEUE = True   # Set to True to enqueue instead of running directly
+USE_QUEUE = True    # False → run in-process (blocks until complete)
+VERBOSE   = False   # True  → print job progress to stdout
+                    # (queue mode: start worker with -v instead)
 
 
 def main():
@@ -35,22 +37,22 @@ def main():
 
     input_csv = os.path.join(base_dir, "input_data", "acr_t2.csv")
 
-    title = "acr_t2_parallel"
+    title = "ff_acr_t2"
 
     pipeline_spec = [
         {"stage": "cleaning", "args": {"input_csv": input_csv, "overwrite_metadata": True}},
         {"stage": "generation", "args": {"engine": "rdkit", "n": 200}},
-        {"stage": "pruning", "args": {"n": 1}},
-        {"stage": "optimisation", "args": {"engine": "xtb_opt_normal"}},
-        {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
-        #{"stage": "optimisation", "args": {"engine": "forcefield_mmff"}},
-        #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_fast"}},
+        {"stage": "pruning",      "args": {"rmsd_threshold": 1.0}},
+        {"stage": "pruning", "args": {"n": 10}},
+        {"stage": "optimisation", "args": {"engine": "forcefield_uff"}},
+        {"stage": "optimisation", "args": {"engine": "forcefield_mmff"}},
+        {"stage": "pruning",      "args": {"energy_window": 6}},
+        {"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_fast"}},
         #{"stage": "optimisation", "args": {"engine": "orca_opt_final"}},
-        #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_final"}},
+        {"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_final"}},
         {"stage": "orcacosmo", "args": {}},
         {"stage": "solubility", "args": {}},
     ]
-
 
     parameters = {
         "title": title,
@@ -80,9 +82,10 @@ def main():
         print("Done. Worker will process this request.")
     else:
         print("Running pipeline directly...\n")
+        import modules.execution.runner as _runner
+        _runner._VERBOSE = VERBOSE
         PipelineRunner.run_request(req.request_id, base_dir)
         print("\nPipeline finished.")
-
 
 
 if __name__ == "__main__":
