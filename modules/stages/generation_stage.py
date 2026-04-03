@@ -346,7 +346,21 @@ def _worker_rdkit(args: dict) -> dict:
 
     os.makedirs(xyz_out_dir, exist_ok=True)
 
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    # SMILES → mol with sanitize=False fallback (matches IC pipeline lines 156-164)
+    raw_mol = Chem.MolFromSmiles(smiles)
+    if raw_mol is None:
+        raw_mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        if raw_mol is not None:
+            raw_mol.UpdatePropertyCache(strict=False)
+    if raw_mol is None:
+        return {
+            "item_id": inchi_key, "status": "failed",
+            "error": f"RDKit could not parse SMILES: {smiles}", "log_details": [],
+            "worker_name": worker_name, "worker_pid": worker_pid,
+            "conformers": [],
+        }
+    mol = Chem.AddHs(raw_mol)
+
     emb = AllChem.ETKDGv3()
     emb.randomSeed            = seed
     emb.numThreads            = cores_per_item
@@ -364,10 +378,26 @@ def _worker_rdkit(args: dict) -> dict:
             "conformers": [],
         }
 
+    # Retry with random coords if fewer conformers were generated than requested
+    # (matches IC pipeline lines 1069-1072)
+    if len(conf_ids) < num_confs:
+        try:
+            emb_retry           = AllChem.ETKDGv3()
+            emb_retry.randomSeed            = seed
+            emb_retry.numThreads            = cores_per_item
+            emb_retry.useSmallRingTorsions  = True
+            emb_retry.useMacrocycleTorsions = True
+            emb_retry.enforceChirality      = True
+            emb_retry.useRandomCoords       = True
+            conf_ids = AllChem.EmbedMultipleConfs(mol, num_confs, emb_retry)
+        except Exception:
+            pass  # keep whatever conf_ids we have
+
     if len(conf_ids) == 0:
         return {
             "item_id": inchi_key, "status": "failed",
-            "error": "Zero conformers embedded", "log_details": [],
+            "error": "Zero conformers embedded (tried standard + random coords)",
+            "log_details": [],
             "worker_name": worker_name, "worker_pid": worker_pid,
             "conformers": [],
         }
