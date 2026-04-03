@@ -386,12 +386,33 @@ class PruningStage(BaseStage):
         )
         return survivors
 
+    @staticmethod
+    def _heavy_atom_mol(mol: Chem.Mol) -> Chem.Mol:
+        """
+        Return a new mol containing only non-hydrogen atoms with their 3D
+        positions.  Used to compute RMSD over heavy atoms only, matching the
+        legacy IC pipeline's rms_only_heavy_atoms=True behaviour (lines 248-250
+        of ConformerGenerator_IC.py).
+
+        Works on mols loaded from XYZ (no bond information required).
+        """
+        rw    = Chem.RWMol()
+        conf  = mol.GetConformer()
+        heavy = [(i, atom) for i, atom in enumerate(mol.GetAtoms())
+                 if atom.GetAtomicNum() != 1]
+        new_conf = Chem.Conformer(len(heavy))
+        for j, (i, atom) in enumerate(heavy):
+            rw.AddAtom(Chem.Atom(atom.GetAtomicNum()))
+            new_conf.SetAtomPosition(j, conf.GetAtomPosition(i))
+        rw.AddConformer(new_conf, assignId=True)
+        return rw.GetMol()
+
     def _prune_rmsd(self, conformers: list, rmsd_threshold: float) -> list:
         if not conformers or rmsd_threshold <= 0:
             return conformers
 
-        sorted_conf  = sorted(conformers, key=lambda c: c.energy)
-        survivors    = []
+        sorted_conf   = sorted(conformers, key=lambda c: c.energy)
+        survivors     = []
         survivor_mols = []
 
         for rec in sorted_conf:
@@ -402,6 +423,7 @@ class PruningStage(BaseStage):
                         f"RMSD pruning: could not load XYZ for {rec.lookup_id}"
                     )
                     continue
+                mol = self._heavy_atom_mol(mol)
             except Exception as e:
                 self.log_warning(
                     f"RMSD pruning: XYZ parse failed for {rec.lookup_id} — {e}"
@@ -417,7 +439,7 @@ class PruningStage(BaseStage):
                 survivor_mols.append(mol)
 
         self.log_info(
-            f"RMSD pruning (threshold={rmsd_threshold} Å): "
+            f"RMSD pruning (heavy atoms, threshold={rmsd_threshold} Å): "
             f"{len(conformers)} → {len(survivors)}"
         )
         return survivors
