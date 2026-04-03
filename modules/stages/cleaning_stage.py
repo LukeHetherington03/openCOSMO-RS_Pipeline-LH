@@ -88,7 +88,42 @@ DEFAULT_METADATA = {
     "experimental_solubility_mol_frac": None,
 }
 
-METADATA_VERSION = 3
+METADATA_VERSION = 4
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Functional group SMARTS patterns
+# Counts are stored as functional_groups: {name: int} in metadata.
+# Only groups with ≥5% prevalence in a typical drug-like / solubility dataset
+# are included — rarer groups produce near-zero columns that L1 regularisation
+# zeroes out anyway, and pollute the metadata.
+# ─────────────────────────────────────────────────────────────────────────────
+FUNCTIONAL_GROUP_SMARTS = {
+    # Acids / esters / carbonyl
+    "carboxylic_acid": "[CX3](=O)[OX2H1]",
+    "ester":           "[CX3](=O)[OX2][#6]",
+    "amide":           "[CX3](=O)[NX3]",
+    "ketone":          "[CX3H0;!R](=O)([#6])[#6]",
+    "aldehyde":        "[CX3H1](=O)",
+    "lactam":          "[NX3R][CX3R](=O)",
+    "lactone":         "[OX2R][CX3R](=O)",
+    # Hydroxyl
+    "alcohol":         "[OX2H;!$(OC=O);!$(Oc1ccccc1)]",
+    "phenol":          "[OX2H]c1ccccc1",
+    # Ethers
+    "ether":           "[OD2;!$(OC=O)]([#6])[#6]",
+    # Amines
+    "amine_primary":   "[NX3;H2;!$(NC=O)]",
+    "amine_secondary": "[NX3;H1;!$(NC=O)]",
+    "amine_tertiary":  "[NX3;H0;!$(NC=O);!$([N+])]",
+    # Sulfur / nitrogen special
+    "nitro":           "[NX3+](=O)[O-]",
+    "sulfonamide":     "[SX4](=O)(=O)[NX3]",
+    "urea":            "[NX3][CX3](=O)[NX3]",
+    # Halogens
+    "halogen_F":       "[F]",
+    "halogen_Cl":      "[Cl]",
+    "halogen_Br":      "[Br]",
+}
 
 
 class CleaningStage(BaseStage):
@@ -762,7 +797,8 @@ class CleaningStage(BaseStage):
         mode:         str,
     ):
         from rdkit.Chem import Lipinski as L, rdMolDescriptors as R, Crippen as C
-        from modules.utils.molecule_utils import MoleculeUtils
+        from modules.utils.melting_point_finder import MeltingPointFinder
+        _mp_finder = MeltingPointFinder()
 
         pipeline_version = self.config.get("pipeline_version", "unknown")
         timestamp        = datetime.utcnow().isoformat() + "Z"
@@ -838,6 +874,12 @@ class CleaningStage(BaseStage):
                     "Bertz_complexity":   Descriptors.BertzCT(mol),
                     "molar_refractivity": C.MolMR(mol),
                 }
+                # Functional group counts (SMARTS-based)
+                fg_counts = {}
+                for fg_name, smarts in FUNCTIONAL_GROUP_SMARTS.items():
+                    pat = Chem.MolFromSmarts(smarts)
+                    fg_counts[fg_name] = len(mol.GetSubstructMatches(pat)) if pat is not None else 0
+                phys["functional_groups"] = fg_counts
             else:
                 phys = {k: None for k in (
                     "rotatable_bonds", "molecular_weight", "heavy_atom_count",
@@ -845,6 +887,7 @@ class CleaningStage(BaseStage):
                     "aromatic_rings", "Fsp3", "Bertz_complexity",
                     "molar_refractivity",
                 )}
+                phys["functional_groups"] = {fg: None for fg in FUNCTIONAL_GROUP_SMARTS}
                 self.log(
                     f"[META]  {ik}: RDKit cannot parse SMILES — descriptors null"
                 )
@@ -894,12 +937,12 @@ class CleaningStage(BaseStage):
                 meta["melting_temp_source"] = src
                 mp_counts["provided"] += 1
             else:
-                # PubChem fallback
-                mp_info = MoleculeUtils.get_melting_point(inchikey=ik)
-                mt_raw  = mp_info.get("melting_temp")
-                mt_src  = mp_info.get("melting_temp_source", "pubchem")
+                # PubChem + NIST fallback via MeltingPointFinder
+                mp_result = _mp_finder.get_best(ik)
+                mt_raw    = mp_result.melting_temp
+                mt_src    = mp_result.source
 
-                if mt_raw not in (None, "N/A", "", "nan"):
+                if mt_raw is not None:
                     try:
                         kt_pub = float(mt_raw)
                         if MP_MIN_K <= kt_pub <= MP_MAX_K:
