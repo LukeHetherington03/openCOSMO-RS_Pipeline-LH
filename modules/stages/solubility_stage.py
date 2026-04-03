@@ -186,6 +186,7 @@ STRICT MODE HIERARCHY
 
 import csv
 import json
+import math
 import multiprocessing
 import os
 import shutil
@@ -200,6 +201,19 @@ from modules.utils.mixture_inputs_builder import (
     normalise_solvent_ratios,
 )
 from modules.solubility_engine.legacy_cpp_wrapper import run_legacy_cosmors
+
+
+_WATER_MOLARITY = 55.51  # mol/L at 25 °C
+
+
+def _mol_frac_to_logS(x):
+    try:
+        v = float(x)
+        if v <= 0.0 or v >= 1.0:
+            return None
+        return math.log10(v * _WATER_MOLARITY / (1.0 - v))
+    except (TypeError, ValueError):
+        return None
 
 
 # =============================================================================
@@ -325,6 +339,7 @@ def _solubility_worker(args: dict) -> dict:
             "melting_temp":                        meta["Tm"],
             "melting_temp_source":                 meta["Tm_source"],
             "experimental_solubility_mol_frac":    meta["experimental_solubility_mol_frac"],
+            "log_solubility_experimental":         _mol_frac_to_logS(meta["experimental_solubility_mol_frac"]),
             "aqsol_predicted_solubility_mol_frac": meta["aqsol_predicted_solubility_mol_frac"],
             "conformer_history":                   conformer_history,
             "solvent_results":                     solvent_results,
@@ -421,7 +436,7 @@ def _run_combo(
             f"Solvent normalisation failed: {e}",
         )
 
-    # ── Build mixture_inputs.txt ──────────────────────────────────────────────
+    # ── Build mixture_inputs.txt and run COSMO-RS (with SORcf fallback) ───────
     combo_solvent_dirs = {
         s["name"]: Path(copied_solvent_dirs[s["name"]])
         for s in cdef["solvents"]
@@ -431,73 +446,98 @@ def _run_combo(
         for s in cdef["solvents"]
     }
 
-    try:
-        mixture_text = build_mixture_inputs(
-            solute_meta = {
-                "inchi_key":    inchi_key,
-                "smiles":       meta["smiles"],
-                "melting_temp": meta["Tm"],
-                "Gfus_mode":    meta["Gfus_mode"],
-                "Hfus":         meta["Hfus"],
-            },
-            solute_dir           = Path(solute_dir),
-            solvent_dirs         = combo_solvent_dirs,
-            n_solute_confs       = n_solute,
-            n_solvent_confs      = combo_n_solvent_confs,
-            defaults             = defaults,
-            temperature          = temperature,
-            solvents             = solvents_normalised,
-            solute_multiplicity  = int(meta.get("multiplicity", 1)),
-        )
-    except Exception as e:
-        return _failed_combo(
-            combo_id, cdef, temperature, n_solute,
-            n_solvent_confs_map, sol_path, raw_path, mix_path,
-            f"mixture_inputs build failed: {e}",
-        )
+    sorcf_schedule = defaults["saturation"].get(
+        "sorcf_fallback", [defaults["saturation"].get("SORcf", 1.0)]
+    )
+    timeout = defaults.get("cosmors_timeout", 1500)
 
-    with open(mix_path, "w") as f:
-        f.write(mixture_text)
+    result     = None
+    used_sorcf = sorcf_schedule[0]
+    last_error = None
 
-    # ── Run COSMO-RS ──────────────────────────────────────────────────────────
-    try:
-        result = run_legacy_cosmors(
-            mixture_text,
-            python_src    = opencosmo["python_src"],
-            cpp_bindings  = opencosmo["cpp_bindings"],
-            driver_script = opencosmo["python_driver"],
-        )
-    except Exception as e:
-        with open(raw_path, "w") as f:
-            f.write("")
-        return _failed_combo(
-            combo_id, cdef, temperature, n_solute,
-            n_solvent_confs_map, sol_path, raw_path, mix_path,
-            f"COSMO-RS engine error: {e}",
-        )
+    for sorcf in sorcf_schedule:
+        attempt_defaults = {
+            **defaults,
+            "saturation": {**defaults["saturation"], "SORcf": sorcf},
+        }
+
+        try:
+            mixture_text = build_mixture_inputs(
+                solute_meta = {
+                    "inchi_key":    inchi_key,
+                    "smiles":       meta["smiles"],
+                    "melting_temp": meta["Tm"],
+                    "Gfus_mode":    meta["Gfus_mode"],
+                    "Hfus":         meta["Hfus"],
+                },
+                solute_dir           = Path(solute_dir),
+                solvent_dirs         = combo_solvent_dirs,
+                n_solute_confs       = n_solute,
+                n_solvent_confs      = combo_n_solvent_confs,
+                defaults             = attempt_defaults,
+                temperature          = temperature,
+                solvents             = solvents_normalised,
+                solute_multiplicity  = int(meta.get("multiplicity", 1)),
+            )
+        except Exception as e:
+            return _failed_combo(
+                combo_id, cdef, temperature, n_solute,
+                n_solvent_confs_map, sol_path, raw_path, mix_path,
+                f"mixture_inputs build failed: {e}",
+            )
+
+        with open(mix_path, "w") as f:
+            f.write(mixture_text)
+
+        try:
+            result = run_legacy_cosmors(
+                mixture_text,
+                python_src    = opencosmo["python_src"],
+                cpp_bindings  = opencosmo["cpp_bindings"],
+                driver_script = opencosmo["python_driver"],
+                timeout       = timeout,
+            )
+        except Exception as e:
+            with open(raw_path, "w") as f:
+                f.write("")
+            last_error = f"COSMO-RS engine error: {e}"
+            result = None
+            break  # non-timeout error — don't retry with different SORcf
+
+        if result.get("timed_out"):
+            last_error = f"timed out after {timeout}s with SORcf={sorcf}"
+            result = None
+            continue  # try next SORcf value
+
+        # Engine responded (converged or returned no solubility) — stop retrying
+        used_sorcf = sorcf
+        break
 
     with open(raw_path, "w") as f:
-        f.write(result.get("raw_stdout") or "")
+        f.write((result or {}).get("raw_stdout") or "")
 
-    predicted = result.get("solubility")
+    predicted = (result or {}).get("solubility")
     if predicted is None:
         return _failed_combo(
             combo_id, cdef, temperature, n_solute,
             n_solvent_confs_map, sol_path, raw_path, mix_path,
-            "COSMO-RS engine returned no solubility value",
+            last_error or "COSMO-RS engine returned no solubility value",
         )
 
     combo_result = {
-        "combo_id":             combo_id,
-        "combo_label":          cdef["label"],
-        "solvents":             solvents_normalised,
-        "temperature_K":        temperature,
-        "predicted_solubility": predicted,
-        "n_solute_confs":       n_solute,
-        "n_solvent_confs":      combo_n_solvent_confs,
-        "mixture_inputs_path":  mix_path,
-        "raw_output_path":      raw_path,
-        "error":                None,
+        "combo_id":                   combo_id,
+        "combo_label":                cdef["label"],
+        "solvents":                   solvents_normalised,
+        "temperature_K":              temperature,
+        "predicted_solubility":       predicted,
+        "log_solubility_predicted":   _mol_frac_to_logS(predicted),
+        "saturation_mole_fractions":  result.get("saturation_mole_fractions", []),
+        "n_solute_confs":             n_solute,
+        "n_solvent_confs":            combo_n_solvent_confs,
+        "mixture_inputs_path":        mix_path,
+        "raw_output_path":            raw_path,
+        "sorcf_used":                 used_sorcf,
+        "error":                      None,
     }
 
     with AtomicWriter(sol_path) as f:
@@ -1110,11 +1150,13 @@ class SolubilityStage(BaseStage):
         fieldnames = [
             "inchi_key", "mol_name", "smiles",
             "melting_temp", "melting_temp_source",
-            "experimental_solubility_mol_frac",
+            "experimental_solubility_mol_frac", "log_solubility_experimental",
             "aqsol_predicted_solubility_mol_frac",
             "combo_id", "combo_label",
-            "temperature_K", "predicted_solubility", "abs_error",
+            "temperature_K", "predicted_solubility", "log_solubility_predicted",
+            "abs_error", "logS_abs_error",
             "n_solute_confs", "n_solvent_confs",
+            "sorcf_used",
             "error", "mol_json_path",
         ]
         rows = []
@@ -1133,6 +1175,13 @@ class SolubilityStage(BaseStage):
                 n_solv_str = ",".join(
                     f"{k}:{v}" for k, v in sr.get("n_solvent_confs", {}).items()
                 )
+                logS_exp  = mol.get("log_solubility_experimental")
+                logS_pred = sr.get("log_solubility_predicted")
+                logS_err  = (
+                    round(abs(logS_pred - logS_exp), 6)
+                    if logS_pred is not None and logS_exp is not None
+                    else None
+                )
                 rows.append({
                     "inchi_key":                          ik,
                     "mol_name":                           mol.get("mol_name"),
@@ -1140,14 +1189,18 @@ class SolubilityStage(BaseStage):
                     "melting_temp":                       mol.get("melting_temp"),
                     "melting_temp_source":                mol.get("melting_temp_source"),
                     "experimental_solubility_mol_frac":   exp,
+                    "log_solubility_experimental":        logS_exp,
                     "aqsol_predicted_solubility_mol_frac":mol.get("aqsol_predicted_solubility_mol_frac"),
                     "combo_id":                           sr.get("combo_id"),
                     "combo_label":                        sr.get("combo_label"),
                     "temperature_K":                      sr.get("temperature_K"),
                     "predicted_solubility":               pred,
+                    "log_solubility_predicted":           logS_pred,
                     "abs_error":                          abs_error,
+                    "logS_abs_error":                     logS_err,
                     "n_solute_confs":                     sr.get("n_solute_confs"),
                     "n_solvent_confs":                    n_solv_str,
+                    "sorcf_used":                         sr.get("sorcf_used"),
                     "error":                              sr.get("error"),
                     "mol_json_path":                      mol_json,
                 })
@@ -1181,6 +1234,7 @@ class SolubilityStage(BaseStage):
             ("Tm_source",    18),
             ("n_sol_confs",  11),
             ("n_solv_confs", 14),
+            ("sorcf_used",    9),
         ]
 
         def _cell(val, w):
@@ -1226,6 +1280,7 @@ class SolubilityStage(BaseStage):
                     (mol.get("melting_temp_source", ""), 18),
                     (sr.get("n_solute_confs", ""),      11),
                     (n_solv_str,                        14),
+                    (sr.get("sorcf_used", ""),           9),
                 ]
                 lines.append(
                     sep.join(_cell(v, w) for v, w in values) + sep + mol_json
