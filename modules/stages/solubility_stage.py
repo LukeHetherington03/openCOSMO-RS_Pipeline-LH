@@ -243,6 +243,7 @@ def _solubility_worker(args: dict) -> dict:
     defaults     = args["defaults"]
     opencosmo    = args["opencosmo"]
     verbose      = args["verbose"]
+    ensemble     = args.get("ensemble", True)
 
     results_dir = os.path.join(outputs_dir, "results")
 
@@ -260,16 +261,16 @@ def _solubility_worker(args: dict) -> dict:
         for d in (mol_dir, inputs_dir, solute_raw_dir, solute_dir, solvents_dir):
             os.makedirs(d, exist_ok=True)
 
-        # ── Stage solute conformers ───────────────────────────────────────────
+        # ── Stage solute conformers (raw copies for provenance) ───────────────
         all_orca_paths = [Path(c["orcacosmo_path"]) for c in conformers]
 
         for p in all_orca_paths:
             shutil.copy(str(p), os.path.join(solute_raw_dir, p.name))
 
-        for i, p in enumerate(sorted(all_orca_paths)):
-            shutil.copy(str(p), os.path.join(solute_dir, f"{inchi_key}_c{i:03d}.orcacosmo"))
-
-        n_solute = len(list(Path(solute_dir).glob("*.orcacosmo")))
+        # Sort conformers by orca path so indices are deterministic
+        sorted_pairs = sorted(
+            zip(all_orca_paths, conformers), key=lambda x: str(x[0])
+        )
 
         # ── Stage all required solvents once (shared across combos) ──────────
         all_solvent_names = {
@@ -296,24 +297,58 @@ def _solubility_worker(args: dict) -> dict:
         # ── Load metadata ─────────────────────────────────────────────────────
         meta = _load_metadata(inchi_key, metadata_dir)
 
-        # ── Run each valid combo ──────────────────────────────────────────────
+        # ── Run combos — ensemble or per-conformer ────────────────────────────
         solvent_results = []
-        for combo_id, cdef in valid_combos.items():
-            result = _run_combo(
-                inchi_key           = inchi_key,
-                mol_dir             = mol_dir,
-                combo_id            = combo_id,
-                cdef                = cdef,
-                meta                = meta,
-                solute_dir          = solute_dir,
-                n_solute            = n_solute,
-                copied_solvent_dirs = copied_solvent_dirs,
-                n_solvent_confs_map = n_solvent_confs_map,
-                defaults            = defaults,
-                opencosmo           = opencosmo,
-                verbose             = verbose,
-            )
-            solvent_results.append(result)
+
+        if ensemble:
+            # Stage all conformers together into solute/
+            for i, (p, _) in enumerate(sorted_pairs):
+                shutil.copy(str(p), os.path.join(solute_dir, f"{inchi_key}_c{i:03d}.orcacosmo"))
+            n_solute = len(list(Path(solute_dir).glob("*.orcacosmo")))
+
+            for combo_id, cdef in valid_combos.items():
+                result = _run_combo(
+                    inchi_key           = inchi_key,
+                    mol_dir             = mol_dir,
+                    combo_id            = combo_id,
+                    cdef                = cdef,
+                    meta                = meta,
+                    solute_dir          = solute_dir,
+                    n_solute            = n_solute,
+                    copied_solvent_dirs = copied_solvent_dirs,
+                    n_solvent_confs_map = n_solvent_confs_map,
+                    defaults            = defaults,
+                    opencosmo           = opencosmo,
+                    verbose             = verbose,
+                )
+                result["conformer_index"] = None
+                solvent_results.append(result)
+
+        else:
+            # Run COSMO-RS once per conformer individually
+            for i, (p, conf) in enumerate(sorted_pairs):
+                conf_solute_dir = os.path.join(inputs_dir, f"solute_c{i:03d}")
+                os.makedirs(conf_solute_dir, exist_ok=True)
+                shutil.copy(str(p), os.path.join(conf_solute_dir, f"{inchi_key}_c000.orcacosmo"))
+
+                for combo_id, cdef in valid_combos.items():
+                    result = _run_combo(
+                        inchi_key           = inchi_key,
+                        mol_dir             = mol_dir,
+                        combo_id            = f"{combo_id}_c{i:03d}",
+                        cdef                = cdef,
+                        meta                = meta,
+                        solute_dir          = conf_solute_dir,
+                        n_solute            = 1,
+                        copied_solvent_dirs = copied_solvent_dirs,
+                        n_solvent_confs_map = n_solvent_confs_map,
+                        defaults            = defaults,
+                        opencosmo           = opencosmo,
+                        verbose             = verbose,
+                    )
+                    result["conformer_index"]  = i
+                    result["conformer_energy"] = conf.get("energy")
+                    solvent_results.append(result)
 
         elapsed = time.perf_counter() - t_start
 
@@ -366,7 +401,8 @@ def _solubility_worker(args: dict) -> dict:
             "worker_pid":  worker_pid,
             "log_details": [
                 ("combos",   f"{n_ok} ok / {n_fail} failed"),
-                ("confs",    f"{n_solute} solute"),
+                ("confs",    f"{len(sorted_pairs)} solute"
+                             + ("" if ensemble else " (per-conformer)")),
                 ("elapsed",  f"{elapsed:.1f}s"),
             ],
             # Stage payload — full mol_result inlined for checkpoint
@@ -816,6 +852,13 @@ class SolubilityStage(BaseStage):
         # ── Verbose ───────────────────────────────────────────────────────────
         self.verbose = bool(self.parameters.get("verbose", False))
 
+        # ── Ensemble mode ─────────────────────────────────────────────────────
+        # ensemble=True (default): all conformers passed as one ensemble to
+        # COSMO-RS → single solubility per combo.
+        # ensemble=False: COSMO-RS run once per conformer individually →
+        # per-conformer solubility rows tagged with conformer_index.
+        self.ensemble = bool(self.parameters.get("ensemble", True))
+
         # ── Strict mode hierarchy ─────────────────────────────────────────────
         params_strict = self.parameters.get("strict")
         if params_strict is not None:
@@ -1108,6 +1151,7 @@ class SolubilityStage(BaseStage):
             "defaults":     self._sol_defaults,
             "opencosmo":    self.opencosmo,
             "verbose":      self.verbose,
+            "ensemble":     self.ensemble,
         }
 
     # =========================================================================
@@ -1153,6 +1197,7 @@ class SolubilityStage(BaseStage):
             "experimental_solubility_mol_frac", "log_solubility_experimental",
             "aqsol_predicted_solubility_mol_frac",
             "combo_id", "combo_label",
+            "conformer_index", "conformer_energy",
             "temperature_K", "predicted_solubility", "log_solubility_predicted",
             "abs_error", "logS_abs_error",
             "n_solute_confs", "n_solvent_confs",
@@ -1193,6 +1238,8 @@ class SolubilityStage(BaseStage):
                     "aqsol_predicted_solubility_mol_frac":mol.get("aqsol_predicted_solubility_mol_frac"),
                     "combo_id":                           sr.get("combo_id"),
                     "combo_label":                        sr.get("combo_label"),
+                    "conformer_index":                    sr.get("conformer_index"),
+                    "conformer_energy":                   sr.get("conformer_energy"),
                     "temperature_K":                      sr.get("temperature_K"),
                     "predicted_solubility":               pred,
                     "log_solubility_predicted":           logS_pred,
