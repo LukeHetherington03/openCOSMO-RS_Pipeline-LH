@@ -10,10 +10,13 @@
     "enabled": true,
     "Gfus_mode": "MyrdalYalkowsky",
     "Hfus": "N/A",
-    "SORcf": 1.0
+    "SORcf": 1.0,
+    "sorcf_fallback": [1.0, 0.8, 0.6, 0.4, 0.2]
   },
 
   "parallel": true,
   "n_workers": 4,
-  "strict": false
+  "strict": false,
+
+  "cosmors_timeout": 1500
 }
