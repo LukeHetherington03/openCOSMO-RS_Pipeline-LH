@@ -77,9 +77,10 @@ class QueueWorker:
     before the worker exits.
     """
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str, verbose: bool = False):
         self.base_dir  = os.path.abspath(base_dir)
         self._stop_now = False
+        self._verbose  = verbose
 
     # ─────────────────────────────────────────────────────────────
     # Signal handler
@@ -113,6 +114,9 @@ class QueueWorker:
     # ─────────────────────────────────────────────────────────────
 
     def run_forever(self, idle_sleep: float = 1.0):
+        import modules.execution.runner as _runner
+        _runner._VERBOSE = self._verbose
+
         # Register signal handler
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
@@ -156,7 +160,7 @@ class QueueWorker:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def start_worker(base_dir: str):
+def start_worker(base_dir: str, verbose: bool = False):
     # ── New process group ─────────────────────────────────────────────────
     # Place this process in its own process group so SIGTERM/SIGKILL to
     # the group kills the entire subtree (pool workers, ORCA, XTB).
@@ -170,13 +174,15 @@ def start_worker(base_dir: str):
     QueueManager.write_pid(pid)
     QueueManager.write_pgid(pgid)   # new — needed by pl q stop/kill
 
-    worker = QueueWorker(base_dir)
+    worker = QueueWorker(base_dir, verbose=verbose)
     worker.run_forever()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m modules.execution.worker <base_dir>")
-        sys.exit(1)
-
-    start_worker(sys.argv[1])
+    import argparse
+    parser = argparse.ArgumentParser(description="Pipeline queue worker")
+    parser.add_argument("base_dir")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Print job progress to stdout")
+    args = parser.parse_args()
+    start_worker(args.base_dir, verbose=args.verbose)

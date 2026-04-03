@@ -21,10 +21,21 @@ import json
 import os
 import shutil
 import time
+from datetime import datetime
 
 from modules.build.request_manager import Request
 from modules.build.job_manager import Job
 from modules.execution.resource_allocator import ResourceAllocator
+
+_VERBOSE: bool = False   # set True by start_worker(-v) or direct mode in main.py
+
+
+def _progress(msg: str) -> None:
+    """Print a timestamped progress line to stdout when verbose mode is on."""
+    if _VERBOSE:
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] {msg}", flush=True)
+
 
 # Extra output files to copy to final_outputs/ per last stage (beyond canonical JSON)
 _STAGE_EXTRA_FILES = {
@@ -41,9 +52,11 @@ class PipelineRunner:
     def run_request(cls, request_id: str, base_dir: str):
         """Entry point used exclusively by QueueWorker."""
         req = Request.load(base_dir, request_id)
+        _progress(f"Request {request_id}  starting  ({len(req.jobs)} jobs)")
         req.log_header("Pipeline started")
         cls._log_pipeline_header(req)
         cls._execute_pipeline(req)
+        _progress(f"Request {request_id}  complete")
 
     # =========================================================================
     # Pipeline header — echoed once at the very top of the request log
@@ -83,6 +96,7 @@ class PipelineRunner:
 
         t_pipeline_start = time.monotonic()
         completed_jobs   = []   # (job_id, stage) in execution order
+        n_jobs           = len(req.jobs)
 
         start_index   = cls._find_resume_index(req)
         current_index = start_index
@@ -102,9 +116,27 @@ class PipelineRunner:
             current_job.parameters.update(result.as_params())
 
             # -- Execute -------------------------------------------------------
+            _progress(
+                f"[{current_index + 1}/{n_jobs}] {current_job.stage}  starting"
+                f"  ({n_items} items · {result.n_workers} workers"
+                f" × {result.cores_per_item} cores)"
+            )
             req.log(f"Running job: {current_job.job_id}")
             current_job.run()
             req.log(f"Completed job: {current_job.job_id}")
+            try:
+                with open(current_job.job_state_path) as _f:
+                    _st = json.load(_f)
+                _wall = cls._fmt_duration(cls._job_wall_seconds(_st))
+                _ok   = _st.get("n_ok", "?")
+                _fail = _st.get("n_failed", 0)
+                _fstr = f"  {_fail} failed" if _fail else ""
+                _progress(
+                    f"[{current_index + 1}/{n_jobs}] {current_job.stage}  done"
+                    f"  ({_ok} ok{_fstr} · {_wall})"
+                )
+            except Exception:
+                _progress(f"[{current_index + 1}/{n_jobs}] {current_job.stage}  done")
 
             completed_jobs.append((current_job.job_id, current_job.stage))
 
