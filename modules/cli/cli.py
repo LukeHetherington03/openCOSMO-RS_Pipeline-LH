@@ -73,6 +73,9 @@ Requests:
     pl r publish <id>           Mark a request as published
     pl r archive <id>           Archive a request
     pl r trash <id>             Move a request to trash
+    pl r advance [<id>]         Force current pool to drain — SIGTERMs all running
+                                  COSMO-RS subprocesses so they fail cleanly and the
+                                  stage completes. Requires <id> to skip confirmation.
 
 Environment:
     pl env check                Run full environment validation

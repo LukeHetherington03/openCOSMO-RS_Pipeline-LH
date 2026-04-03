@@ -39,6 +39,8 @@ class RequestCommands:
         if sub == "archive": return RequestCommands.archive(rest)
         if sub == "trash": return RequestCommands.trash(rest)
 
+        if sub == "advance": return RequestCommands.advance(rest)
+
         print(f"Unknown request command: {sub}")
 
     # ------------------------------------------------------------
@@ -134,3 +136,56 @@ class RequestCommands:
         rid = args[0]
         RequestAnnotation(base_dir).trash(rid)
         print(f"Trashed {rid}")
+
+    # ------------------------------------------------------------
+    # Advance — force current pool to drain by killing stuck items
+    # ------------------------------------------------------------
+    @staticmethod
+    def advance(args):
+        import signal
+        import psutil
+
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+
+        driver_script = cfg.get("opencosmo", {}).get("python_driver", "")
+        if not driver_script:
+            print("ERROR: opencosmo.python_driver not set in config/paths.json")
+            return
+
+        # Find all running COSMO-RS subprocesses for this project
+        found = []
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmdline = proc.info["cmdline"] or []
+                if driver_script in cmdline:
+                    found.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        if not found:
+            print("[advance] No running COSMO-RS subprocesses found.")
+            return
+
+        # If no ID given, confirm before proceeding
+        if not args:
+            print(f"[advance] Found {len(found)} running COSMO-RS subprocess(es):")
+            for p in found:
+                print(f"  PID {p.pid}")
+            ans = input("Proceed? [y/N] ").strip().lower()
+            if ans != "y":
+                print("[advance] Aborted.")
+                return
+        else:
+            print(f"[advance] Found {len(found)} running COSMO-RS subprocess(es) — sending SIGTERM...")
+
+        killed = []
+        for proc in found:
+            try:
+                proc.send_signal(signal.SIGTERM)
+                killed.append(proc.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        print(f"[advance] Sent SIGTERM to PIDs: {killed}")
+        print("[advance] Pool will drain and stage will complete with these items marked as failed.")
