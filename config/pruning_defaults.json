@@ -1,6 +1,5 @@
 {
   "energy_window": 5.0,
-  "energy_window_units": "kcal",
   "rmsd_threshold": 0.5,
   "keep_all": false,
   "strict": false,
@@ -8,5 +7,5 @@
   "percentile": null,
   "n": null,
   "n_high": null,
-  "n_start": null
+  "window_pair": null
 }

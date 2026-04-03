@@ -34,9 +34,24 @@ PRUNING METHODS  (applied in order if configured)
   percentile      float (0–100) Remove conformers above this energy percentile.
   n               int          Keep only the N lowest-energy conformers.
   n_high          int          Keep only the N highest-energy conformers.
-  n_start + n     int, int     Slice: keep n conformers starting at n_start.
+  rdkit_post_opt_legacy  bool  Replicate the 4 internal filters from the IC
+                                colleague pipeline's calculate_rdkit(), applied
+                                in order: convergence → overlapping atoms →
+                                Boltzmann (T=298.15 K, cutoff 1%) → RMSD 1.0 Å.
+                                Use after forcefield_mmff optimisation.
+
+  window_pair     float (kcal/mol)
+                               Testing/paper tool — keeps exactly two conformers:
+                                (1) the global energy minimum, and (2) the
+                                lowest-energy conformer whose energy lies above
+                                the given window.  Degrades to one conformer if
+                                nothing exists outside the window.  Not intended
+                                for normal pipeline use.
 
   keep_all        bool         Skip all pruning — pass through unchanged.
+
+All energy thresholds are in kcal/mol.  All stored conformer energies are
+normalised to kcal/mol by OptimisationStage.
 
 Methods are applied sequentially in the order listed in PRUNING_METHODS.
 
@@ -70,10 +85,6 @@ from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 from modules.utils.conformers import ConformerRecord, ConformerSet
 
-HARTREE_TO_KJ   = 2625.49962
-HARTREE_TO_KCAL = 627.509474
-
-
 class PruningStage(BaseStage):
     """
     Conformer pruning stage.
@@ -86,13 +97,14 @@ class PruningStage(BaseStage):
 
     # Ordered pruning dispatch table
     PRUNING_METHODS = {
-        "rmsd_threshold": "_prune_rmsd",
-        "energy_window":  "_prune_energy_window",
-        "max_energy":     "_prune_max_energy",
-        "percentile":     "_prune_percentile",
-        "n":              "_prune_keep_lowest_n",
-        "n_high":         "_prune_keep_highest_n",
-        "n_start":        "_prune_slice",
+        "rdkit_post_opt_legacy": "_prune_rdkit_post_opt_legacy",
+        "rmsd_threshold":        "_prune_rmsd",
+        "energy_window":         "_prune_energy_window",
+        "max_energy":            "_prune_max_energy",
+        "percentile":            "_prune_percentile",
+        "n":                     "_prune_keep_lowest_n",
+        "n_high":                "_prune_keep_highest_n",
+        "window_pair":           "_prune_window_pair",
     }
 
     # =========================================================================
@@ -205,12 +217,7 @@ class PruningStage(BaseStage):
 
             prune_fn = getattr(self, method_name)
             before   = len(survivors)
-
-            if param_name == "n_start":
-                survivors = prune_fn(survivors, p["n_start"], p.get("n", 0))
-            else:
-                survivors = prune_fn(survivors, value)
-
+            survivors = prune_fn(survivors, value)
             after = len(survivors)
             methods_used.append(f"{param_name} ({before}→{after})")
 
@@ -269,36 +276,115 @@ class PruningStage(BaseStage):
                 self.log_warning(f"Could not parse int for '{k}': {v}")
                 return None
 
+        def _b(k):
+            v = params.get(k)
+            if v is None:
+                return None
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.lower() not in ("false", "0", "no", "")
+            return bool(v)
+
         return {
-            "rmsd_threshold": _f("rmsd_threshold"),
-            "energy_window":  _f("energy_window"),
-            "max_energy":     _f("max_energy"),
-            "percentile":     _f("percentile"),
-            "n":              _i("n"),
-            "n_high":         _i("n_high"),
-            "n_start":        _i("n_start"),
+            "rdkit_post_opt_legacy": _b("rdkit_post_opt_legacy"),
+            "rmsd_threshold":        _f("rmsd_threshold"),
+            "energy_window":         _f("energy_window"),
+            "max_energy":            _f("max_energy"),
+            "percentile":            _f("percentile"),
+            "n":                     _i("n"),
+            "n_high":                _i("n_high"),
+            "window_pair":           _f("window_pair"),
         }
 
     # =========================================================================
-    # Energy conversion
+    # Pruning methods  (all energies in kcal/mol)
     # =========================================================================
 
-    def _convert_energy(self, energy_hartree: float, units: str) -> float | None:
-        if energy_hartree is None:
-            return None
-        u = str(units).lower()
-        if u == "hartree":
-            return energy_hartree
-        if u == "kcal":
-            return energy_hartree * HARTREE_TO_KCAL
-        if u in ("kj", "kJ"):
-            return energy_hartree * HARTREE_TO_KJ
-        self.log_warning(f"Unknown energy units '{units}' — assuming hartree")
-        return energy_hartree
+    def _prune_rdkit_post_opt_legacy(
+        self, conformers: list, enabled: bool
+    ) -> list:
+        """
+        Replicates the 4 post-MMFF filters applied inside the IC colleague
+        pipeline's calculate_rdkit() (ConformerGenerator_IC.py lines 1097–1131).
 
-    # =========================================================================
-    # Pruning methods
-    # =========================================================================
+        Applied in order:
+          1. Convergence  — remove if latest optimisation_history status != "converged"
+          2. Overlap      — remove if any atom pair < 0.1 Å (IC threshold)
+          3. Boltzmann    — remove if rel_prob < 1% at T=298.15 K (~2.73 kcal/mol)
+          4. RMSD 1.0 Å   — cluster, keep lower-energy representative (IC rms_threshold)
+        """
+        if not enabled:
+            return conformers
+
+        import math
+        import numpy as np
+
+        # ── 1. Convergence filter ─────────────────────────────────────────────
+        survivors = []
+        for rec in conformers:
+            hist   = rec.optimisation_history or []
+            status = hist[-1].get("status", "unknown") if hist else "unknown"
+            if status == "converged":
+                survivors.append(rec)
+            else:
+                self.log_info(
+                    f"rdkit_post_opt_legacy: {rec.lookup_id} removed — "
+                    f"MMFF status={status!r}"
+                )
+        self.log_info(
+            f"rdkit_post_opt_legacy convergence: {len(conformers)} → {len(survivors)}"
+        )
+        if not survivors:
+            return survivors
+
+        # ── 2. Overlapping atoms filter ───────────────────────────────────────
+        OVERLAP_THRESHOLD = 0.1  # Å — matches IC pipeline
+
+        def _has_overlapping_atoms(xyz_path: str) -> bool:
+            mol = Chem.MolFromXYZFile(xyz_path)
+            if mol is None:
+                return False
+            pos  = mol.GetConformer().GetPositions()     # (N, 3)
+            diff = pos[:, None, :] - pos[None, :, :]    # (N, N, 3)
+            dist = np.linalg.norm(diff, axis=2)         # (N, N)
+            np.fill_diagonal(dist, 1.0)                 # ignore self
+            return bool(np.any(dist < OVERLAP_THRESHOLD))
+
+        before    = len(survivors)
+        survivors = [r for r in survivors if not _has_overlapping_atoms(r.xyz_path)]
+        self.log_info(
+            f"rdkit_post_opt_legacy overlap (<{OVERLAP_THRESHOLD} Å): "
+            f"{before} → {len(survivors)}"
+        )
+        if not survivors:
+            return survivors
+
+        # ── 3. Boltzmann filter ───────────────────────────────────────────────
+        # IC: rel_prob = exp(-E/RT) / exp(-E_min/RT); remove if rel_prob < 1e-2
+        # Energies in kcal/mol.  RT = R·T / 4184 ≈ 0.5927 kcal/mol at 298.15 K.
+        RT_KCAL = 8.314 * 298.15 / 4184.0
+        e_min   = min(r.energy for r in survivors)
+        before  = len(survivors)
+        survivors = [
+            r for r in survivors
+            if math.exp(-(r.energy - e_min) / RT_KCAL) >= 0.01
+        ]
+        self.log_info(
+            f"rdkit_post_opt_legacy Boltzmann (T=298.15 K, cutoff=1e-2): "
+            f"{before} → {len(survivors)}"
+        )
+        if not survivors:
+            return survivors
+
+        # ── 4. RMSD 1.0 Å filter ─────────────────────────────────────────────
+        # IC: _get_idx_to_keep_by_rms_window(rms_threshold=1.0)
+        before    = len(survivors)
+        survivors = self._prune_rmsd(survivors, rmsd_threshold=1.0)
+        self.log_info(
+            f"rdkit_post_opt_legacy RMSD (1.0 Å): {before} → {len(survivors)}"
+        )
+        return survivors
 
     def _prune_rmsd(self, conformers: list, rmsd_threshold: float) -> list:
         if not conformers or rmsd_threshold <= 0:
@@ -336,23 +422,18 @@ class PruningStage(BaseStage):
         )
         return survivors
 
-    def _prune_energy_window(
-        self, conformers: list, energy_window: float, units: str = "kcal"
-    ) -> list:
+    def _prune_energy_window(self, conformers: list, energy_window: float) -> list:
         if not conformers:
             return conformers
 
-        converted = np.array(
-            [self._convert_energy(c.energy, units) for c in conformers],
-            dtype=float,
-        )
-        min_e     = float(converted.min())
+        energies  = np.array([c.energy for c in conformers], dtype=float)
+        min_e     = float(energies.min())
         survivors = [
-            c for c, e in zip(conformers, converted)
+            c for c, e in zip(conformers, energies)
             if (e - min_e) <= energy_window
         ]
         self.log_info(
-            f"Energy window (ΔE ≤ {energy_window} {units}): "
+            f"Energy window (ΔE ≤ {energy_window} kcal/mol): "
             f"{len(conformers)} → {len(survivors)}"
         )
         return survivors
@@ -395,17 +476,40 @@ class PruningStage(BaseStage):
         )
         return survivors
 
-    def _prune_slice(self, conformers: list, n_start: int, n: int) -> list:
-        if n <= 0 or not conformers:
-            return []
-        total = len(conformers)
-        start = (total + n_start) if n_start < 0 else n_start
-        survivors = conformers[max(0, start): max(0, start + n)]
-        self.log_info(
-            f"Slice (start={n_start}, n={n}): "
-            f"{len(conformers)} → {len(survivors)}"
+    def _prune_window_pair(self, conformers: list, energy_window: float) -> list:
+        """
+        Testing/paper method — keeps exactly two conformers separated by an
+        energy window:
+          1. The global energy minimum (lowest-energy conformer).
+          2. The lowest-energy conformer whose energy exceeds
+             min_energy + energy_window (kcal/mol).
+
+        If no conformer exists outside the window, returns just the minimum
+        with a warning.  Not intended for normal pipeline runs.
+        """
+        if not conformers:
+            return conformers
+
+        sorted_conf = sorted(conformers, key=lambda c: c.energy)
+        minimum     = sorted_conf[0]
+        e_min       = minimum.energy
+
+        outside = [c for c in sorted_conf if (c.energy - e_min) > energy_window]
+
+        if outside:
+            pair = [minimum, outside[0]]
+            self.log_info(
+                f"window_pair (window={energy_window} kcal/mol): "
+                f"{len(conformers)} → 2 "
+                f"(min={e_min:.3f}, outlier={outside[0].energy:.3f} kcal/mol)"
+            )
+            return pair
+
+        self.log_warning(
+            f"window_pair: no conformer found above window={energy_window} kcal/mol "
+            f"(min={e_min:.3f}, max={sorted_conf[-1].energy:.3f}) — returning minimum only"
         )
-        return survivors
+        return [minimum]
 
     # =========================================================================
     # Output writing
@@ -426,20 +530,21 @@ class PruningStage(BaseStage):
             "kept_after_pruning":      "Final Count",
             "methods_used":            "Pruning Steps Applied",
             "rmsd_threshold":          "RMSD Threshold (Å)",
-            "energy_window":           "Energy Window",
-            "max_energy":              "Max Energy",
+            "energy_window":           "Energy Window (kcal/mol)",
+            "max_energy":              "Max Energy (kcal/mol)",
             "percentile":              "Percentile Cutoff",
             "n":                       "Keep Lowest N",
             "n_high":                  "Keep Highest N",
-            "n_start":                 "Slice Start",
+            "window_pair":             "Window Pair (kcal/mol)",
         })
 
         col_order = [
             "Molecule", "Total Conformers", "With Valid Energy",
             "Removed (Missing Energy)", "Final Count",
             "Pruning Steps Applied", "RMSD Threshold (Å)",
-            "Energy Window", "Max Energy", "Percentile Cutoff",
-            "Keep Lowest N", "Keep Highest N", "Slice Start",
+            "Energy Window (kcal/mol)", "Max Energy (kcal/mol)",
+            "Percentile Cutoff", "Keep Lowest N", "Keep Highest N",
+            "Window Pair (kcal/mol)",
         ]
         df = df.reindex(columns=col_order)
 
