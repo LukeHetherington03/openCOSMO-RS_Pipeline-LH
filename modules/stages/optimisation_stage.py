@@ -135,6 +135,7 @@ from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 from modules.utils.conformers import ConformerRecord, ConformerSet
 
+HARTREE_TO_KCAL = 627.509474   # all stored energies are in kcal/mol
 
 # ── Parser registry (imported lazily to keep worker picklable) ────────────────
 # Parsers are called inside the worker — imports happen at module load time
@@ -239,6 +240,11 @@ def _optimisation_worker(args: dict) -> dict:
         status = _determine_status(parsed, output_xyz)
         energy = _validate_energy(parsed.get("energy"))
 
+        # Normalise to kcal/mol — quantum backends (xtb, gxtb, orca) output
+        # Hartree; forcefield backends (MMFF94/UFF) already output kcal/mol.
+        if energy is not None and engine_spec["family"] != "forcefield":
+            energy = energy * HARTREE_TO_KCAL
+
         # Build history entry — schema unchanged from original stage
         history_entry = {
             "stage":           "optimisation",
@@ -279,7 +285,7 @@ def _optimisation_worker(args: dict) -> dict:
         if not keep_scratch:
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
-        energy_str = f"{energy:.6f} Eh" if energy is not None else "n/a"
+        energy_str = f"{energy:.4f} kcal/mol" if energy is not None else "n/a"
 
         return {
             # BaseStage contract
