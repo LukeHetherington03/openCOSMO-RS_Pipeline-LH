@@ -122,6 +122,15 @@ from datetime import datetime
 
 import pandas as pd
 
+try:
+    import rdkit
+    from rdkit.Chem import AllChem
+    from modules.utils.rdkit_helper import load_mol_from_xyz as _ff_load_mol
+    from modules.utils.rdkit_helper import write_xyz as _ff_write_xyz
+    _RDKIT_AVAILABLE = True
+except ImportError:
+    _RDKIT_AVAILABLE = False
+
 from modules.stages.base_stage import BaseStage
 from modules.utils.atomic_write import AtomicWriter
 from modules.utils.conformers import ConformerRecord, ConformerSet
@@ -132,14 +141,16 @@ from modules.utils.conformers import ConformerRecord, ConformerSet
 # which is fine since this module is imported in the main process before
 # the pool is created.
 
+from modules.parsers.opt.forcefield_log_parser import ForcefieldLogParser
 from modules.parsers.opt.gxtb_log_parser import GxTBLogParser
 from modules.parsers.opt.orca_log_parser import ORCALogParser
 from modules.parsers.opt.xtb_log_parser import XTBLogParser
 
 _PARSERS = {
-    "orca":  ORCALogParser,
-    "xtb":   XTBLogParser,
-    "gxtb":  GxTBLogParser,
+    "orca":        ORCALogParser,
+    "xtb":         XTBLogParser,
+    "gxtb":        GxTBLogParser,
+    "forcefield":  ForcefieldLogParser,
 }
 
 _ORCA_OPT_KEYWORDS = {
@@ -367,6 +378,8 @@ def _run_backend(
             output_xyz  = output_xyz,
             output_log  = output_log,
             engine_spec = engine_spec,
+            max_iter    = max_iter,
+            charge      = charge,
         )
 
     raise RuntimeError(f"Unknown engine family: {family}")
@@ -663,27 +676,70 @@ def _backend_xtb(
 
 
 # =============================================================================
-# Backend: Forcefield (stub)
+# Backend: Forcefield (RDKit MMFF94 / UFF)
 # =============================================================================
+
 
 def _backend_forcefield(
     input_xyz:   str,
     output_xyz:  str,
     output_log:  str,
     engine_spec: dict,
-    **kwargs,
+    max_iter:    int = 500,
+    charge:      int = 0,
 ) -> dict:
-    with open(output_log, "w") as f:
-        f.write(
-            f"Forcefield optimisation placeholder "
-            f"({engine_spec.get('forcefield')})\n"
+    if not _RDKIT_AVAILABLE:
+        raise RuntimeError(
+            "RDKit is not installed — cannot run forcefield optimisation. "
+            "Install it with: conda install -c conda-forge rdkit"
         )
-    shutil.copy(input_xyz, output_xyz)
-    return {
-        "run_status":  "ok",
-        "version":     "unknown",
-        "command_str": "",
-    }
+
+    ff_name = engine_spec.get("forcefield", "MMFF94").upper()
+    use_mmff = ff_name.startswith("MMFF")
+
+    try:
+        mol = _ff_load_mol(input_xyz, charge=charge)
+
+        if use_mmff:
+            props = AllChem.MMFFGetMoleculeProperties(mol)
+            ff    = AllChem.MMFFGetMoleculeForceField(mol, props)
+        else:
+            ff = AllChem.UFFGetMoleculeForceField(mol)
+
+        ff.Initialize()
+        ret_code = ff.Minimize(maxIts=max_iter)
+        # ret_code: 0 = converged, 1 = not converged within maxIts, -1 = error
+        opt_status = "converged" if ret_code == 0 else "not_converged"
+        energy     = ff.CalcEnergy()
+
+        comment = (
+            f"energy: {energy:.10f} kcal/mol  ff: {ff_name}"
+            f"  status: {opt_status}  rdkit: {rdkit.__version__}"
+        )
+        _ff_write_xyz(mol, output_xyz, comment=comment)
+
+        with open(output_log, "w") as f:
+            f.write(f"FORCEFIELD_FAMILY  {ff_name}\n")
+            f.write(f"OPTIMIZATION_STATUS  {opt_status}\n")
+            f.write(f"FORCEFIELD_ENERGY  {energy:.10f}\n")
+            f.write(f"ATOMS  {mol.GetNumAtoms()}\n")
+
+        return {
+            "run_status":  "ok",
+            "version":     rdkit.__version__,
+            "command_str": "",
+        }
+
+    except Exception as exc:
+        with open(output_log, "w") as f:
+            f.write(f"FORCEFIELD_FAMILY  {ff_name}\n")
+            f.write(f"OPTIMIZATION_STATUS  failed\n")
+            f.write(f"ERROR  {exc}\n")
+        return {
+            "run_status":  "failed",
+            "version":     rdkit.__version__ if _RDKIT_AVAILABLE else "unknown",
+            "command_str": "",
+        }
 
 
 # =============================================================================
