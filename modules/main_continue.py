@@ -14,18 +14,18 @@ from modules.execution.queue import QueueManager
 # ------------------------------------------------------------
 
 # Parent request + job to continue from
-PARENT_REQUEST_ID = "R-25Feb26-1353-56457-NTU_AZ_medicinesol_set2"     # <-- EDIT THIS
-PARENT_JOB_ID     = "J-25Feb26-1439-03066-orcacosmo"    # <-- EDIT THIS
+PARENT_REQUEST_ID = "R-23Feb26-1548-39330-test_sol_t2"     # <-- EDIT THIS
+PARENT_JOB_ID     = "J-23Feb26-1548-43129-orcacosmo"    # <-- EDIT THIS
 
 # Title for the new continuation request
-NEW_TITLE = "NTU_set2_solfix"
+NEW_TITLE = "choline_solvent_test"
 
 # Whether to enqueue instead of running directly
 USE_QUEUE = False
 
 # Define the new pipeline spec you want to run
 PIPELINE_SPEC = [
-    {"stage": "solubility", "args": {}},
+    {"stage": "solubility", "args": {"solvent_list": "choline_test_list"}},
 ]
 
 
