@@ -1,8 +1,7 @@
 {
   "default_basis": "TZVP",
-  "fallback_basis": false,
   "functional": "BP86",
   "solvation": "CPCM",
-  "maxcore": 2000,
+  "maxcore_mb": 2000,
   "strict": false
 }

@@ -709,8 +709,17 @@ def _backend_forcefield(
         if use_mmff:
             props = AllChem.MMFFGetMoleculeProperties(mol)
             ff    = AllChem.MMFFGetMoleculeForceField(mol, props)
+            if ff is None:
+                # MMFF not parametrised for this molecule — fall back to UFF
+                ff_name = "UFF"
+                ff = AllChem.UFFGetMoleculeForceField(mol)
         else:
             ff = AllChem.UFFGetMoleculeForceField(mol)
+
+        if ff is None:
+            raise RuntimeError(
+                f"Could not initialise {ff_name} force field for this molecule"
+            )
 
         ff.Initialize()
         ret_code = ff.Minimize(maxIts=max_iter)
@@ -826,7 +835,25 @@ class OptimisationStage(BaseStage):
         self._load_stage_config()
         self._load_entries()
 
-        lookup_ids = [r["lookup_id"] for r in self._all_records]
+        # fallback_only: pass through already-usable conformers; only submit
+        # records that lack a valid XYZ or energy to the worker pool.
+        if self.fallback_only:
+            self._pass_through_records = [
+                r for r in self._all_records if _is_record_usable(r)
+            ]
+            to_process = [
+                r for r in self._all_records if not _is_record_usable(r)
+            ]
+            self.log_info(
+                f"fallback_only=True — "
+                f"{len(self._pass_through_records)} pass-through / "
+                f"{len(to_process)} to process"
+            )
+        else:
+            self._pass_through_records = []
+            to_process = self._all_records
+
+        lookup_ids = [r["lookup_id"] for r in to_process]
 
         # Resume vs fresh start
         if self.job.pending_items:
@@ -911,11 +938,18 @@ class OptimisationStage(BaseStage):
             )
 
         # ── Other parameters ──────────────────────────────────────────────────
-        self.max_iter              = int(merged.get("max_iter", 250))
+        self.max_iter              = int(merged.get("max_iter", 2000))
         self.keep_scratch          = bool(merged.get("keep_scratch", False))
         self.global_fail_threshold = float(
             merged.get("global_fail_threshold", 0.8)
         )
+
+        # ── fallback_only ─────────────────────────────────────────────────────
+        # When True, conformers that are already usable (valid XYZ + energy)
+        # are passed through unchanged; only un-optimised / failed conformers
+        # are submitted to the worker pool.  Intended for pipeline stages that
+        # run as a fallback after an earlier optimisation stage.
+        self.fallback_only = bool(self.parameters.get("fallback_only", False))
 
         # ── Strict mode hierarchy ─────────────────────────────────────────────
         # 1. parameters["strict"]    runtime override
@@ -1048,6 +1082,10 @@ class OptimisationStage(BaseStage):
 
     def _assemble_output(self):
         checkpoints = self._load_all_checkpoints()
+
+        # Merge pass-through records (fallback_only mode) before new checkpoints
+        if self._pass_through_records:
+            checkpoints = self._pass_through_records + checkpoints
 
         if not checkpoints:
             self.fail("No successful checkpoints — cannot write energies.json")

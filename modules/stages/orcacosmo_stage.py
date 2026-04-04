@@ -61,15 +61,15 @@ DEFAULTS  (orcacosmo_defaults.json)
 
   {
     "default_basis":  "TZVP",       basis set to use — "TZVP" or "TZVPD"
-    "fallback_basis": false,         second attempt if default fails:
-                                       false  = no fallback, raise on failure
-                                       "TZVP" = fall back to TZVP
-                                       "TZVPD"= fall back to TZVPD
     "functional":     "BP86",        DFT functional
     "solvation":      "CPCM",        solvation model keyword
     "maxcore_mb":     2000,          ORCA %MaxCore in MB
     "strict":         false          abort on first failure
   }
+
+  Fallback basis sets are handled by adding a second orcacosmo stage in
+  the pipeline spec with the desired basis and parameters.fallback_only=true.
+  That stage will skip conformers that already have a valid .orcacosmo file.
 
 =========================================================================
 PARALLELISM
@@ -141,7 +141,6 @@ def _orcacosmo_worker(args: dict) -> dict:
     cpcm_cut_area  = args["cpcm_cut_area"]
     cpcm_file      = args["cpcm_file"]
     default_basis  = args["default_basis"]
-    fallback_basis = args["fallback_basis"]
     functional     = args["functional"]
     solvation      = args["solvation"]
     maxcore_mb     = args["maxcore_mb"]
@@ -175,7 +174,6 @@ def _orcacosmo_worker(args: dict) -> dict:
             functional      = functional,
             solvation       = solvation,
             default_basis   = default_basis,
-            fallback_basis  = fallback_basis,
             cores_per_item  = cores_per_item,
             maxcore_mb      = maxcore_mb,
             orca_inputs_dir = orca_inputs_dir,
@@ -401,7 +399,6 @@ def _run_orca_with_basis(
     functional:      str,
     solvation:       str,
     default_basis:   str,
-    fallback_basis:  str | bool,
     cores_per_item:  int,
     maxcore_mb:      int,
     orca_inputs_dir: str,
@@ -409,7 +406,7 @@ def _run_orca_with_basis(
     multiplicity:    int = 1,
 ) -> dict:
     """
-    Run ORCA with default_basis; optionally retry with fallback_basis.
+    Run ORCA with default_basis.
 
     orca_base is the short safe name used for ORCA %base and all workdir
     filenames.  lookup_id is used only for the archived .inp copies saved
@@ -417,21 +414,21 @@ def _run_orca_with_basis(
 
     Returns dict with:
       method_used        str    basis set that produced valid output
-      fallback_triggered bool
-      elapsed_default    float  wall time for default_basis attempt
-      elapsed_fallback   float | None
+      fallback_triggered bool   always False (fallback handled externally)
+      elapsed_default    float  wall time for the attempt
+      elapsed_fallback   None
       elapsed_total      float
 
-    Raises RuntimeError on unrecoverable failure.
+    Raises RuntimeError on failure.  Fallback basis sets should be
+    implemented as a separate pipeline stage with fallback_only=True.
     """
     log       = os.path.join(workdir, f"{orca_base}.log")
     cpcm      = os.path.join(workdir, f"{orca_base}.cpcm")
     cpcm_corr = os.path.join(workdir, f"{orca_base}.cpcm_corr")
 
-    # ── Default basis attempt ─────────────────────────────────────────────────
-    inp_default = os.path.join(workdir, f"{orca_base}_{default_basis.lower()}.inp")
+    inp = os.path.join(workdir, f"{orca_base}_{default_basis.lower()}.inp")
     _write_orca_input(
-        path           = inp_default,
+        path           = inp,
         xyz_name       = f"{orca_base}.xyz",
         base_name      = orca_base,
         basis          = default_basis,
@@ -446,67 +443,27 @@ def _run_orca_with_basis(
     )
     # Archive .inp under lookup_id so it's identifiable after the run
     shutil.copy(
-        inp_default,
+        inp,
         os.path.join(orca_inputs_dir, f"{lookup_id}_{default_basis.lower()}.inp")
     )
 
     t0 = time.perf_counter()
-    _run_orca(workdir, inp_default, log, orca_command, cores_per_item)
-    elapsed_default = time.perf_counter() - t0
-
-    if _validate_cpcm(cpcm, cpcm_corr, log):
-        return {
-            "method_used":        default_basis,
-            "fallback_triggered": False,
-            "elapsed_default":    elapsed_default,
-            "elapsed_fallback":   None,
-            "elapsed_total":      elapsed_default,
-        }
-
-    # ── Fallback attempt ──────────────────────────────────────────────────────
-    if not fallback_basis:
-        raise RuntimeError(
-            f"{default_basis} failed for {lookup_id} "
-            f"and no fallback_basis is configured"
-        )
-
-    _cleanup_failed_run(workdir, orca_base)
-
-    inp_fallback = os.path.join(workdir, f"{orca_base}_{fallback_basis.lower()}.inp")
-    _write_orca_input(
-        path           = inp_fallback,
-        xyz_name       = f"{orca_base}.xyz",
-        base_name      = orca_base,
-        basis          = fallback_basis,
-        functional     = functional,
-        solvation      = solvation,
-        cpcm_radii     = cpcm_radii,
-        cpcm_cut_area  = cpcm_cut_area,
-        cores_per_item = cores_per_item,
-        maxcore_mb     = maxcore_mb,
-        charge         = charge,
-        multiplicity   = multiplicity,
-    )
-    shutil.copy(
-        inp_fallback,
-        os.path.join(orca_inputs_dir, f"{lookup_id}_{fallback_basis.lower()}.inp")
-    )
-
-    t1 = time.perf_counter()
-    _run_orca(workdir, inp_fallback, log, orca_command, cores_per_item)
-    elapsed_fallback = time.perf_counter() - t1
+    _run_orca(workdir, inp, log, orca_command, cores_per_item)
+    elapsed = time.perf_counter() - t0
 
     if not _validate_cpcm(cpcm, cpcm_corr, log):
         raise RuntimeError(
-            f"Both {default_basis} and {fallback_basis} failed for {lookup_id}"
+            f"{default_basis} ORCA calculation failed for {lookup_id}. "
+            f"To retry with a different basis, add a second orcacosmo stage "
+            f"with the desired basis and fallback_only=True."
         )
 
     return {
-        "method_used":        fallback_basis,
-        "fallback_triggered": True,
-        "elapsed_default":    elapsed_default,
-        "elapsed_fallback":   elapsed_fallback,
-        "elapsed_total":      elapsed_default + elapsed_fallback,
+        "method_used":        default_basis,
+        "fallback_triggered": False,
+        "elapsed_default":    elapsed,
+        "elapsed_fallback":   None,
+        "elapsed_total":      elapsed,
     }
 
 
@@ -552,7 +509,33 @@ class OrcacosmoStage(BaseStage):
         self._prepare_directories()
         self._load_entries()
 
-        lookup_ids = self._discover_lookup_ids()
+        all_lookup_ids = self._discover_lookup_ids()
+
+        # fallback_only: pass through conformers that already have a valid
+        # .orcacosmo file; only submit those without one to the worker pool.
+        if self.fallback_only:
+            orcacosmo_dir = os.path.join(self.outputs_dir, "orcacosmo_outputs")
+            self._pass_through_checkpoints = []
+            to_process_ids = []
+            for lid in all_lookup_ids:
+                p = os.path.join(orcacosmo_dir, f"{lid}.orcacosmo")
+                if os.path.exists(p) and os.path.getsize(p) > 100:
+                    entry = self.entry_map.get(lid, {})
+                    self._pass_through_checkpoints.append(
+                        self._make_passthrough_checkpoint(lid, entry, p)
+                    )
+                else:
+                    to_process_ids.append(lid)
+            self.log_info(
+                f"fallback_only=True — "
+                f"{len(self._pass_through_checkpoints)} pass-through / "
+                f"{len(to_process_ids)} to process"
+            )
+        else:
+            self._pass_through_checkpoints = []
+            to_process_ids = all_lookup_ids
+
+        lookup_ids = to_process_ids
 
         # Resume vs fresh start
         if self.job.pending_items:
@@ -633,8 +616,12 @@ class OrcacosmoStage(BaseStage):
             )
 
         # ── Basis set ─────────────────────────────────────────────────────────
-        self.default_basis  = self._orca_defaults.get("default_basis",  "TZVPD")
-        self.fallback_basis = self._orca_defaults.get("fallback_basis",  False)
+        # Stage parameter overrides the defaults JSON (allows per-stage basis
+        # set in the pipeline spec, e.g. for a TZVPD fallback stage).
+        self.default_basis = self.parameters.get(
+            "default_basis",
+            self._orca_defaults.get("default_basis", "TZVPD")
+        )
 
         valid_bases = {"TZVP", "TZVPD"}
         if self.default_basis not in valid_bases:
@@ -642,17 +629,13 @@ class OrcacosmoStage(BaseStage):
                 f"default_basis '{self.default_basis}' is not valid. "
                 f"Must be one of: {valid_bases}"
             )
-        if self.fallback_basis and self.fallback_basis not in valid_bases:
-            self.fail(
-                f"fallback_basis '{self.fallback_basis}' is not valid. "
-                f"Must be one of: {valid_bases} or false"
-            )
-        if (self.fallback_basis
-                and self.fallback_basis == self.default_basis):
-            self.fail(
-                f"fallback_basis and default_basis are both "
-                f"'{self.default_basis}' — fallback would never differ"
-            )
+
+        # ── fallback_only ─────────────────────────────────────────────────────
+        # When True, conformers that already have a valid .orcacosmo file are
+        # passed through unchanged; only those without one are submitted to
+        # the worker pool.  Intended for pipeline stages using a fallback
+        # basis set (e.g. TZVP after a TZVPD stage).
+        self.fallback_only = bool(self.parameters.get("fallback_only", False))
 
         # ── Chemistry keywords ────────────────────────────────────────────────
         self.functional = self._orca_defaults.get("functional", "BP86")
@@ -672,12 +655,9 @@ class OrcacosmoStage(BaseStage):
             self.strict_mode = bool(self._orca_defaults.get("strict", False))
 
         # ── Log resolved config ───────────────────────────────────────────────
-        fallback_str = (
-            f'"{self.fallback_basis}"' if self.fallback_basis else "disabled"
-        )
         self.log_config(
             f"default_basis={self.default_basis}  "
-            f"fallback_basis={fallback_str}  "
+            f"fallback_only={self.fallback_only}  "
             f"functional={self.functional}  "
             f"solvation={self.solvation}"
         )
@@ -806,7 +786,6 @@ class OrcacosmoStage(BaseStage):
             "cpcm_cut_area":   self.cpcm_cut_area,
             "cpcm_file":       self.cpcm_file,
             "default_basis":   self.default_basis,
-            "fallback_basis":  self.fallback_basis,
             "functional":      self.functional,
             "solvation":       self.solvation,
             "maxcore_mb":      self.maxcore_mb,
@@ -819,8 +798,39 @@ class OrcacosmoStage(BaseStage):
     # Assemble canonical output from checkpoints
     # =========================================================================
 
+    def _make_passthrough_checkpoint(self, lookup_id: str, entry: dict, orcacosmo_path: str) -> dict:
+        """Build a minimal checkpoint dict for a pass-through conformer."""
+        return {
+            "item_id":              lookup_id,
+            "status":               "ok",
+            "lookup_id":            lookup_id,
+            "inchi_key":            entry.get("inchi_key", ""),
+            "conf_num":             entry.get("conf_num"),
+            "smiles":               entry.get("smiles", ""),
+            "energy":               entry.get("energy"),
+            "provenance":           entry.get("provenance", {}),
+            "optimisation_history": entry.get("optimisation_history", []),
+            "orcacosmo_history": {
+                "method_used":        "pass-through",
+                "default_basis":      self.default_basis,
+                "fallback_triggered": False,
+                "elapsed_default":    0.0,
+                "elapsed_fallback":   None,
+                "elapsed_total":      0.0,
+                "functional":         self.functional,
+                "solvation":          self.solvation,
+                "orca_version":       self.orca_version,
+                "raw_output_paths":   {},
+            },
+            "orcacosmo_path": orcacosmo_path,
+        }
+
     def _assemble_summary(self):
         checkpoints = self._load_all_checkpoints()
+
+        # Merge pass-through records (fallback_only mode) before new checkpoints
+        if self._pass_through_checkpoints:
+            checkpoints = self._pass_through_checkpoints + checkpoints
 
         if not checkpoints:
             self.log_warning("No successful checkpoints to assemble")

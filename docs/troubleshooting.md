@@ -89,7 +89,7 @@ Update `config/paths.json` with the new paths. Do **not** install software insid
    ```
    pipeline_data/requests/<id>/jobs/<orcacosmo-job-id>/outputs/orcacosmo_outputs/
    ```
-4. If using `fallback_basis: false` in `orcacosmo_defaults.json`, any basis set failure is terminal. Set `fallback_basis: "TZVP"` to enable the fallback.
+4. To add a fallback basis, add a second `orcacosmo` stage in your pipeline spec with the desired basis set and `"fallback_only": true`. That stage will only run ORCA on conformers that do not yet have a valid `.orcacosmo` file.
 
 ---
 

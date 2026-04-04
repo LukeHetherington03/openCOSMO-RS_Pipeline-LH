@@ -271,11 +271,11 @@ Runs ORCA CPCM COSMO single-point calculations to produce `.orcacosmo` files for
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `default_basis` | string | `"TZVP"` | Primary basis set: `"TZVP"` or `"TZVPD"` |
-| `fallback_basis` | string or false | `false` | Basis set to try if the primary fails: `"TZVP"`, `"TZVPD"`, or `false` (no fallback — fail immediately) |
+| `default_basis` | string | `"TZVP"` | Basis set: `"TZVP"` or `"TZVPD"` |
+| `fallback_only` | bool | `false` | Skip conformers that already have a valid `.orcacosmo` file. Use this on a second orcacosmo stage with a different basis to implement fallback behaviour. |
 | `functional` | string | `"BP86"` | DFT functional |
 | `solvation` | string | `"CPCM"` | Solvation model keyword |
-| `maxcore` | int | `2000` | ORCA `%MaxCore` in MB per process |
+| `maxcore_mb` | int | `2000` | ORCA `%MaxCore` in MB per process |
 | `strict` | bool | `false` | Abort pool on first failure |
 
 ### Outputs
