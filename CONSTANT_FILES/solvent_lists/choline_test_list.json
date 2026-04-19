@@ -1,0 +1,18 @@
+{
+  "description": "Test list for charged solvent handling — choline alone and choline+chloride pair",
+  "combos": {
+    "choline_only": {
+      "label": "Pure choline (cation only, charge +1)",
+      "solvents": [
+        {"name": "choline", "mol_frac": 1.0}
+      ]
+    },
+    "choline_chloride": {
+      "label": "Choline chloride (1:1 ionic pair, charge-neutral)",
+      "solvents": [
+        {"name": "choline",  "mol_frac": 0.5},
+        {"name": "chloride", "mol_frac": 0.5}
+      ]
+    }
+  }
+}

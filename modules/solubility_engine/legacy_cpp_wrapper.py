@@ -76,24 +76,21 @@ def run_legacy_cosmors(
         # ------------------------------------------------------------
         cmd = ["python3", driver_script, "mixture_inputs.txt"]
 
+        # Use Popen + communicate so we have a live process handle and can kill
+        # it cleanly on timeout.  subprocess.run() raises TimeoutExpired without
+        # a .process attribute, making kill() impossible.
+        proc = subprocess.Popen(
+            cmd,
+            cwd=tmpdir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=tmpdir,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as e:
-            e.process.kill()
-            e.process.wait()
-            raw_out = e.stdout or b""
-            raw_err = e.stderr or b""
-            if isinstance(raw_out, bytes):
-                raw_out = raw_out.decode("utf-8", errors="replace")
-            if isinstance(raw_err, bytes):
-                raw_err = raw_err.decode("utf-8", errors="replace")
+            raw_out_bytes, raw_err_bytes = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raw_out_bytes, raw_err_bytes = proc.communicate()
             return {
                 "returncode": None,
                 "solubility": None,
@@ -101,13 +98,13 @@ def run_legacy_cosmors(
                 "saturation_iterations": 0,
                 "conformer_iterations": 0,
                 "time_taken": None,
-                "raw_stdout": raw_out,
-                "raw_stderr": raw_err,
+                "raw_stdout": raw_out_bytes.decode("utf-8", errors="replace"),
+                "raw_stderr": raw_err_bytes.decode("utf-8", errors="replace"),
                 "import_validation_file": str(validation_file),
             }
 
-        stdout = proc.stdout
-        stderr = proc.stderr
+        stdout = raw_out_bytes.decode("utf-8", errors="replace")
+        stderr = raw_err_bytes.decode("utf-8", errors="replace")
 
         # ------------------------------------------------------------
         # Extract key results

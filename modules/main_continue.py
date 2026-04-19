@@ -14,18 +14,22 @@ from modules.execution.queue import QueueManager
 # ------------------------------------------------------------
 
 # Parent request + job to continue from
-PARENT_REQUEST_ID = "R-23Feb26-1548-39330-test_sol_t2"     # <-- EDIT THIS
-PARENT_JOB_ID     = "J-23Feb26-1548-43129-orcacosmo"    # <-- EDIT THIS
+PARENT_REQUEST_ID = "R-10Apr26-1139-43214-pruning_high_dft_fast"     # <-- EDIT THIS
+PARENT_JOB_ID     = "J-10Apr26-1330-00171-optimisation"    # <-- EDIT THIS
 
 # Title for the new continuation request
-NEW_TITLE = "choline_solvent_test"
+NEW_TITLE = "cosmo_min_conformer"
 
 # Whether to enqueue instead of running directly
-USE_QUEUE = False
+USE_QUEUE = True
 
 # Define the new pipeline spec you want to run
 PIPELINE_SPEC = [
-    {"stage": "solubility", "args": {"solvent_list": "choline_test_list"}},
+    #{"stage": "pruning",      "args": {"energy_window": 6}},
+    #{"stage": "pruning",      "args": {"rmsd_threshold": 1}},
+    {"stage": "pruning", "args": {"n": 1}},
+    {"stage": "orcacosmo", "args": {}},
+    {"stage": "solubility","args": {}},
 ]
 
 

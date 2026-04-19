@@ -15,8 +15,25 @@ class OrcaCosmoOrchestrator:
         # Load XYZ
         self.xyz_atoms = self._load_xyz(self.paths["xyz"])
 
-        # Build adjacency
-        self.adjacency = MoleculeUtils.adjacency_from_xyz(self.xyz_atoms)
+        # Build adjacency from XYZ (all atoms, order matching #XYZ_FILE).
+        # The matrix is only used by cosmo_visualizations — the COSMO-RS
+        # solver does not read it — so a blank matrix on failure is safe.
+        # A size mismatch causes the openCOSMO-RS parser to overrun the
+        # section, so we validate and raise rather than write a bad file.
+        n_xyz = len(self.xyz_atoms)
+        try:
+            self.adjacency = MoleculeUtils.adjacency_from_xyz(self.xyz_atoms)
+        except Exception:
+            # DetermineBonds can fail on ambiguous geometries (e.g. nitro
+            # groups).  Fall back to a blank matrix — visualisation will be
+            # incorrect but the COSMO-RS calculation is unaffected.
+            self.adjacency = [[0] * n_xyz for _ in range(n_xyz)]
+
+        if len(self.adjacency) != n_xyz:
+            raise ValueError(
+                f"Adjacency matrix size mismatch: got {len(self.adjacency)}×"
+                f"{len(self.adjacency)} but XYZ has {n_xyz} atoms."
+            )
 
         # ------------------------------------------------------------
         # FIX: Load JSON from disk before passing to reverse parsers

@@ -48,6 +48,19 @@ PRUNING METHODS  (applied in order if configured)
                                 nothing exists outside the window.  Not intended
                                 for normal pipeline use.
 
+  select_conf     str|list     Keep all conformers for molecules whose inchi_key
+                                is in the given list; drop all conformers for
+                                every other molecule.  Accepts a single inchi_key
+                                string or a list of strings.
+
+  remove_conf     str|list     Drop all conformers for molecules whose inchi_key
+                                is in the given list; keep all others unchanged.
+                                Accepts a single inchi_key string or a list.
+
+  conf_select     list[int]    Pick specific conformers by 0-based index from
+                                the current pool, e.g. [0, 2, 4].  Out-of-range
+                                indices are logged and skipped (not an error).
+
   keep_all        bool         Skip all pruning — pass through unchanged.
 
 All energy thresholds are in kcal/mol.  All stored conformer energies are
@@ -97,6 +110,8 @@ class PruningStage(BaseStage):
 
     # Ordered pruning dispatch table
     PRUNING_METHODS = {
+        "select_conf":           "_prune_select_conf",
+        "remove_conf":           "_prune_remove_conf",
         "rdkit_post_opt_legacy": "_prune_rdkit_post_opt_legacy",
         "rmsd_threshold":        "_prune_rmsd",
         "energy_window":         "_prune_energy_window",
@@ -104,7 +119,9 @@ class PruningStage(BaseStage):
         "percentile":            "_prune_percentile",
         "n":                     "_prune_keep_lowest_n",
         "n_high":                "_prune_keep_highest_n",
+        "conf_select":           "_prune_conf_select",
         "window_pair":           "_prune_window_pair",
+        "lowest_outside_window": "_prune_lowest_outside_window",
     }
 
     # =========================================================================
@@ -174,6 +191,7 @@ class PruningStage(BaseStage):
         total    = len(conformers)
         p        = self._extract_params(params)
         keep_all = params.get("keep_all", False)
+        self._current_inchi_key = inchi_key
 
         if keep_all:
             self.log_info(f"{inchi_key}: keep_all=True — pruning skipped")
@@ -286,7 +304,35 @@ class PruningStage(BaseStage):
                 return v.lower() not in ("false", "0", "no", "")
             return bool(v)
 
+        def _list_str(k):
+            v = params.get(k)
+            if v is None:
+                return None
+            if isinstance(v, str):
+                return [v]
+            if isinstance(v, list):
+                return [str(item) for item in v]
+            self.log_warning(f"Expected string or list for '{k}': {v!r}")
+            return None
+
+        def _list_int(k):
+            v = params.get(k)
+            if v is None:
+                return None
+            if not isinstance(v, list):
+                self.log_warning(f"Expected list for '{k}': {v!r}")
+                return None
+            result = []
+            for item in v:
+                try:
+                    result.append(int(item))
+                except Exception:
+                    self.log_warning(f"Could not parse int in '{k}': {item!r}")
+            return result if result else None
+
         return {
+            "select_conf":           _list_str("select_conf"),
+            "remove_conf":           _list_str("remove_conf"),
             "rdkit_post_opt_legacy": _b("rdkit_post_opt_legacy"),
             "rmsd_threshold":        _f("rmsd_threshold"),
             "energy_window":         _f("energy_window"),
@@ -294,12 +340,42 @@ class PruningStage(BaseStage):
             "percentile":            _f("percentile"),
             "n":                     _i("n"),
             "n_high":                _i("n_high"),
+            "conf_select":           _list_int("conf_select"),
             "window_pair":           _f("window_pair"),
+            "lowest_outside_window": _f("lowest_outside_window"),
         }
 
     # =========================================================================
     # Pruning methods  (all energies in kcal/mol)
     # =========================================================================
+
+    def _prune_select_conf(self, conformers: list, inchi_keys: list) -> list:
+        """Keep all conformers if current molecule is in inchi_keys; drop all otherwise."""
+        if self._current_inchi_key in inchi_keys:
+            self.log_info(
+                f"select_conf: {self._current_inchi_key} matched — "
+                f"keeping all {len(conformers)} conformers"
+            )
+            return conformers
+        self.log_info(
+            f"select_conf: {self._current_inchi_key} not in list — "
+            f"dropping all {len(conformers)} conformers"
+        )
+        return []
+
+    def _prune_remove_conf(self, conformers: list, inchi_keys: list) -> list:
+        """Drop all conformers if current molecule is in inchi_keys; keep all otherwise."""
+        if self._current_inchi_key in inchi_keys:
+            self.log_info(
+                f"remove_conf: {self._current_inchi_key} matched — "
+                f"dropping all {len(conformers)} conformers"
+            )
+            return []
+        self.log_info(
+            f"remove_conf: {self._current_inchi_key} not in list — "
+            f"keeping all {len(conformers)} conformers"
+        )
+        return conformers
 
     def _prune_rdkit_post_opt_legacy(
         self, conformers: list, enabled: bool
@@ -498,6 +574,21 @@ class PruningStage(BaseStage):
         )
         return survivors
 
+    def _prune_conf_select(self, conformers: list, indices: list) -> list:
+        survivors = []
+        for idx in indices:
+            if idx < 0 or idx >= len(conformers):
+                self.log_warning(
+                    f"conf_select: index {idx} out of range "
+                    f"(0–{len(conformers) - 1}) — skipped"
+                )
+            else:
+                survivors.append(conformers[idx])
+        self.log_info(
+            f"conf_select {indices}: {len(conformers)} → {len(survivors)}"
+        )
+        return survivors
+
     def _prune_window_pair(self, conformers: list, energy_window: float) -> list:
         """
         Testing/paper method — keeps exactly two conformers separated by an
@@ -533,6 +624,40 @@ class PruningStage(BaseStage):
         )
         return [minimum]
 
+    def _prune_lowest_outside_window(
+        self, conformers: list, energy_window: float
+    ) -> list:
+        """
+        Testing/paper method — keeps only the lowest-energy conformer whose
+        energy lies strictly above min_energy + energy_window (kcal/mol).
+
+        Pair with a separate n=1 job to compare best vs worst-of-window
+        conformer solubilities independently.  Returns an empty list (with a
+        warning) if no conformer exists outside the window.
+        """
+        if not conformers:
+            return conformers
+
+        sorted_conf = sorted(conformers, key=lambda c: c.energy)
+        e_min       = sorted_conf[0].energy
+
+        outside = [c for c in sorted_conf if (c.energy - e_min) > energy_window]
+
+        if outside:
+            self.log_info(
+                f"lowest_outside_window (window={energy_window} kcal/mol): "
+                f"{len(conformers)} → 1 "
+                f"(selected={outside[0].energy:.3f}, min={e_min:.3f} kcal/mol)"
+            )
+            return [outside[0]]
+
+        self.log_warning(
+            f"lowest_outside_window: no conformer found above "
+            f"window={energy_window} kcal/mol "
+            f"(min={e_min:.3f}, max={sorted_conf[-1].energy:.3f}) — returning empty"
+        )
+        return []
+
     # =========================================================================
     # Output writing
     # =========================================================================
@@ -546,6 +671,8 @@ class PruningStage(BaseStage):
         summary_path = os.path.join(self.outputs_dir, "pruning_summary.csv")
         df = pd.DataFrame(summary_rows).rename(columns={
             "inchi_key":               "Molecule",
+            "select_conf":             "Select Molecules (inchi keys)",
+            "remove_conf":             "Remove Molecules (inchi keys)",
             "total_conformers":        "Total Conformers",
             "valid_energy_conformers": "With Valid Energy",
             "removed_missing_energy":  "Removed (Missing Energy)",
@@ -557,16 +684,21 @@ class PruningStage(BaseStage):
             "percentile":              "Percentile Cutoff",
             "n":                       "Keep Lowest N",
             "n_high":                  "Keep Highest N",
+            "conf_select":             "Conformer Select (indices)",
             "window_pair":             "Window Pair (kcal/mol)",
+            "lowest_outside_window":   "Lowest Outside Window (kcal/mol)",
         })
 
         col_order = [
             "Molecule", "Total Conformers", "With Valid Energy",
             "Removed (Missing Energy)", "Final Count",
-            "Pruning Steps Applied", "RMSD Threshold (Å)",
+            "Pruning Steps Applied",
+            "Select Molecules (inchi keys)", "Remove Molecules (inchi keys)",
+            "RMSD Threshold (Å)",
             "Energy Window (kcal/mol)", "Max Energy (kcal/mol)",
             "Percentile Cutoff", "Keep Lowest N", "Keep Highest N",
-            "Window Pair (kcal/mol)",
+            "Conformer Select (indices)",
+            "Window Pair (kcal/mol)", "Lowest Outside Window (kcal/mol)",
         ]
         df = df.reindex(columns=col_order)
 

@@ -756,7 +756,9 @@ class CleaningStage(BaseStage):
                 v = val.dropna()
                 return float(v.iloc[0]) if len(v) else None
             try:
-                f = float(val)
+                # Strip leading comparison/approximation operators before parsing
+                s = str(val).strip().lstrip("<>~≈ ")
+                f = float(s)
                 return None if pd.isna(f) else f
             except (TypeError, ValueError):
                 return None
@@ -935,6 +937,7 @@ class CleaningStage(BaseStage):
 
             # ── Melting temperature ────────────────────────────────────────
             kt, src = self._resolve_mp(row)
+            user_provided_tm = kt is not None  # True when Tm came from the user's CSV
 
             if kt is not None:
                 meta["melting_temp"]        = kt
@@ -987,7 +990,7 @@ class CleaningStage(BaseStage):
                 continue
             os.makedirs(global_dir, exist_ok=True)
             global_path = os.path.join(global_dir, f"{ik}.json")
-            if overwrite or not os.path.exists(global_path):
+            if overwrite or not os.path.exists(global_path) or user_provided_tm:
                 with open(global_path, "w") as f:
                     f.write(json.dumps(meta, indent=2))
 

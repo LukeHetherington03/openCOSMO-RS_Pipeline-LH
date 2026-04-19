@@ -789,7 +789,7 @@ def _validate_energy(energy) -> float | None:
         return None
     try:
         val = float(energy)
-        if math.isnan(val) or abs(val) > 1e6:
+        if math.isnan(val):
             return None
         return val
     except Exception:
@@ -805,9 +805,18 @@ def _is_record_usable(record: dict) -> bool:
     energy = last.get("energy")
     if not xyz or not os.path.exists(xyz):
         return False
-    if energy is None or math.isnan(energy) or abs(energy) > 1e6:
+    if energy is None or math.isnan(energy):
         return False
     return True
+
+
+def _n_atoms_from_xyz(xyz_path: str) -> int | None:
+    """Return atom count from the first line of an XYZ file, or None."""
+    try:
+        with open(xyz_path) as fh:
+            return int(fh.readline().strip())
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -1092,6 +1101,23 @@ class OptimisationStage(BaseStage):
 
         # Filter to usable records only
         usable = [cp for cp in checkpoints if _is_record_usable(cp)]
+
+        # Warn if any conformer has a suspiciously large energy per atom
+        _PER_ATOM_WARNING_THRESHOLD = 1e5  # kcal/mol per atom
+        for cp in usable:
+            last    = cp.get("optimisation_history", [{}])[-1]
+            energy  = last.get("energy")
+            xyz     = last.get("xyz_path")
+            n_atoms = _n_atoms_from_xyz(xyz) if xyz else None
+            if energy is not None and n_atoms and n_atoms > 0:
+                per_atom = abs(energy) / n_atoms
+                if per_atom > _PER_ATOM_WARNING_THRESHOLD:
+                    ik = cp.get("inchi_key", cp.get("lookup_id", "?"))
+                    self.log_warning(
+                        f"[ENERGY] {ik}: |E|/atom = {per_atom:.0f} kcal/mol "
+                        f"(E={energy:.1f}, n_atoms={n_atoms}) — "
+                        f"unusually large; heavy elements may explain this"
+                    )
 
         if not usable:
             self.fail(

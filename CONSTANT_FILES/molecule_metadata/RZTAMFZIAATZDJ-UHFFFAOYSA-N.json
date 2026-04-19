@@ -1,5 +1,5 @@
 {
-  "metadata_version": 3,
+  "metadata_version": 4,
   "inchi_key": "RZTAMFZIAATZDJ-UHFFFAOYSA-N",
   "smiles": "CCOC(=O)C1=C(C)NC(C)=C(C(=O)OC)C1c1cccc(Cl)c1Cl",
   "mol_name": "Felodipine",
@@ -32,5 +32,26 @@
   "formula_calcd": "",
   "anionic": false,
   "experimental_solubility_mol_frac": null,
-  "melting_temp_c": 439.1
+  "melting_temp_c": 439.1,
+  "functional_groups": {
+    "carboxylic_acid": 0,
+    "ester": 2,
+    "amide": 0,
+    "ketone": 0,
+    "aldehyde": 0,
+    "lactam": 0,
+    "lactone": 0,
+    "alcohol": 0,
+    "phenol": 0,
+    "ether": 0,
+    "amine_primary": 0,
+    "amine_secondary": 1,
+    "amine_tertiary": 0,
+    "nitro": 0,
+    "sulfonamide": 0,
+    "urea": 0,
+    "halogen_F": 0,
+    "halogen_Cl": 2,
+    "halogen_Br": 0
+  }
 }

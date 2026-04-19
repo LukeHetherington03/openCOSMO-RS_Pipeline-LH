@@ -35,21 +35,25 @@ def main():
     config = paths
     config["pipeline_version"] = get_git_version()
 
-    input_csv = os.path.join(base_dir, "input_data", "acr_t2.csv")
+    input_csv = os.path.join(base_dir, "input_data", "acr_t3_edge.csv")
 
-    title = "ff_acr_t2"
+    title = "ff_gxtb_low_t3"
 
     pipeline_spec = [
         {"stage": "cleaning", "args": {"input_csv": input_csv, "overwrite_metadata": True}},
-        {"stage": "generation", "args": {"engine": "rdkit", "n": 200}},
-        {"stage": "pruning",      "args": {"rmsd_threshold": 1.0}},
-        {"stage": "pruning", "args": {"n": 10}},
-        {"stage": "optimisation", "args": {"engine": "forcefield_uff"}},
+        {"stage": "generation", "args": {"engine": "rdkit", "n": 100}},
+        #{"stage": "pruning",      "args": {"rmsd_threshold": 1.0}},
+        #{"stage": "pruning", "args": {"n": 1}},
+        #{"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
         {"stage": "optimisation", "args": {"engine": "forcefield_mmff"}},
-        {"stage": "pruning",      "args": {"energy_window": 6}},
-        {"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_fast"}},
+        #{"stage": "pruning",      "args": {"energy_window": 6}},
+        #{"stage": "pruning",      "args": {"rmsd_threshold": 1}},
+        #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_fast"}},
+        #{"stage": "pruning", "args": {"lowest_outside_window": 6.0}},
+        {"stage": "pruning", "args": {"n": 1}},
+        {"stage": "optimisation", "args": {"engine": "gxtb_opt_normal"}},
         #{"stage": "optimisation", "args": {"engine": "orca_opt_final"}},
-        {"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_final"}},
+        #{"stage": "optimisation", "args": {"engine": "orca_opt_cpcm_final"}},
         {"stage": "orcacosmo", "args": {}},
         {"stage": "solubility", "args": {}},
     ]
